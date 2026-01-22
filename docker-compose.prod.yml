@@ -1,0 +1,29 @@
+version: '3.8'
+
+services:
+  app:
+    build: .
+    ports:
+      - "8000:8000"
+    environment:
+      - DATABASE_URL=postgresql+asyncpg://fitness_user:fitness_pass@db:5432/fitness_tracker
+      - JWT_SECRET=${JWT_SECRET:-your-secret-key-change-in-production}
+      - ENV=production
+    depends_on:
+      - db
+    restart: unless-stopped
+
+  db:
+    image: postgres:15
+    environment:
+      - POSTGRES_USER=fitness_user
+      - POSTGRES_PASSWORD=fitness_pass
+      - POSTGRES_DB=fitness_tracker
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    ports:
+      - "5432:5432"
+    restart: unless-stopped
+
+volumes:
+  postgres_data:

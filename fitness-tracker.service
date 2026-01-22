@@ -1,0 +1,23 @@
+[Unit]
+Description=Fitness Tracker FastAPI Application
+After=network.target postgresql.service
+
+[Service]
+Type=notify
+User=www-data
+Group=www-data
+WorkingDirectory=/var/www/fitness-tracker-api
+Environment="PATH=/var/www/fitness-tracker-api/.venv/bin"
+ExecStart=/var/www/fitness-tracker-api/.venv/bin/gunicorn app.main:app \
+    --workers 4 \
+    --worker-class uvicorn.workers.UvicornWorker \
+    --bind 127.0.0.1:8000 \
+    --timeout 120 \
+    --access-logfile /var/log/fitness-tracker/access.log \
+    --error-logfile /var/log/fitness-tracker/error.log
+
+Restart=always
+RestartSec=10
+
+[Install]
+WantedBy=multi-user.target

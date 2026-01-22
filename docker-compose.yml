@@ -1,0 +1,31 @@
+services:
+  db:
+    image: postgres:16
+    container_name: fitness_pg
+    environment:
+      POSTGRES_USER: fitness
+      POSTGRES_PASSWORD: fitnesspass
+      POSTGRES_DB: fitnessdb
+      TZ: Asia/Kolkata
+      PGTZ: Asia/Kolkata
+    ports:
+      - "5432:5432"
+    volumes:
+      - fitness_pg_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U fitness -d fitnessdb"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+# Remove this for Azure deployment (code runs in Azure App Service, not Docker)
+# app:
+#   build: .
+#   depends_on:
+#     db:
+#       condition: service_healthy
+#   environment:
+#     ...
+
+volumes:
+  fitness_pg_data:
