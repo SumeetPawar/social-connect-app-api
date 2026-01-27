@@ -4,12 +4,12 @@ from sqlalchemy import select, delete
 
 from app.db.deps import get_db
 from app.auth.deps import get_current_user
-from app.models.user import User
-from app.models.push_subscription import PushSubscription
+from app.models import User
+from app.models import PushSubscription
 from app.schemas.push import PushSubscriptionRequest, PushNotificationRequest
 from app.services.push_notify import send_web_push
 
-router = APIRouter(prefix="/push", tags=["push"])
+router = APIRouter(prefix="/api/push", tags=["push"])
 
 
 @router.post("/subscribe")

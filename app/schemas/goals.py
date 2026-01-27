@@ -1,20 +1,22 @@
 from pydantic import BaseModel, Field
 from datetime import date
-from typing import Literal
-from uuid import UUID 
 
-class GoalSetRequest(BaseModel):
-    metric_key: str = Field(default="steps")
-    period: Literal["week", "month"] = "week"
-    daily_target: float = Field(..., gt=0)  # NUMERIC(12,2)
+class SetDailyTargetRequest(BaseModel):
+    daily_target: int = Field(..., description="Daily step target (3000, 5000, 7500, or 10000)")
 
-class GoalSetResponse(BaseModel):
-    id: UUID
-    user_id: UUID
-    metric_key: str
-    period: str
-    daily_target: float
-    period_target: float
-    period_start: date
-    period_end: date
-    anchor_start: date
+class SetDailyTargetResponse(BaseModel):
+    challenge_id: str
+    challenge_title: str
+    daily_target: int
+    weekly_target: int
+    challenge_start: date
+    challenge_end: date
+
+class CurrentGoalResponse(BaseModel):
+    challenge_id: str
+    challenge_title: str
+    daily_target: int
+    weekly_target: int
+    challenge_start: date
+    challenge_end: date
+    has_target_set: bool

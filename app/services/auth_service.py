@@ -8,7 +8,7 @@ from app.core.security import (
     create_refresh_token,
     hash_refresh_token,
 )
-from app.models.refresh_token import RefreshToken
+from app.models import RefreshToken
 
 
 def rotate_refresh_token(db: Session, raw_refresh_token: str):

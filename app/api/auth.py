@@ -13,31 +13,44 @@ from app.core.security import (
     create_refresh_token,
 )
 from app.db.deps import get_db
-from app.models import User, RefreshToken
+from app.models import Department, User, RefreshToken
 from app.schemas.auth import RefreshIn, SignupIn, LoginIn, AuthOut
 
-router = APIRouter(prefix="/auth", tags=["auth"])
-
+router = APIRouter(prefix="/api/auth", tags=["auth"])  # ✅ Changed from /auth to /api/auth
 
 def sha256(s: str) -> str:
     return hashlib.sha256(s.encode("utf-8")).hexdigest()
 
 
-@router.post("/signup", response_model=AuthOut)
+@router.post("/signup")
 async def signup(payload: SignupIn, db: AsyncSession = Depends(get_db)):
-    # check existing
+    # Check if user exists
     q = await db.execute(select(User).where(User.email == payload.email))
-    if q.scalar_one_or_none():
-        raise HTTPException(status_code=409, detail="Email already registered")
-
+    existing = q.scalar_one_or_none()
+    if existing:
+        raise HTTPException(status_code=400, detail="Email already registered")
+    
+    # Get or create default department
+    dept_q = await db.execute(select(Department).where(Department.name == "General"))
+    department = dept_q.scalar_one_or_none()
+    
+    if not department:
+        # Create default department if it doesn't exist
+        department = Department(name="General")
+        db.add(department)
+        await db.flush()  # Get department.id
+    
+    # Hash password
+    hashed = hash_password(payload.password)
+    
+    # Create user WITH department_id
     user = User(
         name=payload.name,
-        email=str(payload.email).lower(),
-        password_hash=hash_password(payload.password),
-        is_email_verified=False,
-        role="user",
-        timezone="Asia/Kolkata",
+        email=payload.email,
+        password_hash=hashed,
+        department_id=department.id  # ← ADD THIS LINE
     )
+    
     db.add(user)
     await db.flush()  # get user.id
     await db.refresh(user)

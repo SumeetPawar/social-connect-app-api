@@ -7,8 +7,10 @@ from app.api.auth import router as auth_router
 from app.api.me import router as me_router
 from app.api.steps import router as steps_router
 from app.api.goals import router as goals_router
-from app.api.streaks import router as streaks_router
+# from app.api.streaks import router as streaks_router
 from app.api.push import router as push_router
+from app.api.challenges import router as challenges_router
+from app.api.goal_definitions import router as goal_definitions_router
 from fastapi.middleware.cors import CORSMiddleware
 from contextlib import asynccontextmanager
 from app.services.scheduler import start_scheduler, stop_scheduler
@@ -43,9 +45,10 @@ app.include_router(auth_router)
 app.include_router(me_router)
 app.include_router(steps_router)
 app.include_router(goals_router)
-app.include_router(streaks_router)
+# app.include_router(streaks_router)
 app.include_router(push_router)
-
+app.include_router(goal_definitions_router)
+app.include_router(challenges_router)
 
 if __name__ == "__main__":
     import os

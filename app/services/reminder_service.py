@@ -3,9 +3,7 @@ from sqlalchemy import select
 from datetime import datetime, date
 from zoneinfo import ZoneInfo
 
-from app.models.user import User
-from app.models.daily_total import DailyTotal
-from app.models.push_subscription import PushSubscription
+from app.models import User, DailySteps, PushSubscription  # Fixed imports
 from app.services.push_notify import send_web_push
 import logging
 
@@ -20,6 +18,7 @@ async def send_step_reminders(db: AsyncSession):
     logger.info("Checking users for step reminders")
     logger.info(f"Current UTC time: {datetime.now().isoformat()}")
     logger.info(f"Current server local time: {datetime.now().isoformat()}")
+    
     # Get all users with push subscriptions
     stmt = select(User).join(PushSubscription, User.id == PushSubscription.user_id).distinct()
     logger.debug(f"Executing query to find users with push subscriptions: {stmt}")
@@ -43,19 +42,19 @@ async def send_step_reminders(db: AsyncSession):
                 continue
 
             # Check if user has logged steps today
-            stmt = select(DailyTotal).where(
-                DailyTotal.user_id == user.id,
-                DailyTotal.day == today
+            stmt = select(DailySteps).where(
+                DailySteps.user_id == str(user.id),  # Convert UUID to string
+                DailySteps.day == today
             )
             result = await db.execute(stmt)
-            daily_total = result.scalar_one_or_none()
+            daily_steps = result.scalar_one_or_none()
 
             # If no steps logged, send notification
-            if not daily_total:
+            if not daily_steps or daily_steps.steps == 0:
                 logger.info(f"User {user.name or user.email} (ID: {user.id}) has not logged steps today - sending reminder")
                 
                 # Get all push subscriptions for this user
-                stmt = select(PushSubscription).where(PushSubscription.user_id == user.id)
+                stmt = select(PushSubscription).where(PushSubscription.user_id == str(user.id))
                 result = await db.execute(stmt)
                 subscriptions = result.scalars().all()
 
@@ -73,8 +72,8 @@ async def send_step_reminders(db: AsyncSession):
                         send_web_push(
                             subscription_info,
                             {
-                                "title": "Step Reminder",
-                                "body": "Don't forget to log your steps to device"
+                                "title": "Step Reminder ⏰",
+                                "body": "Don't forget to log your steps today! Keep your streak going! 🔥"
                             }
                         )
                         sent_count += 1
@@ -87,3 +86,6 @@ async def send_step_reminders(db: AsyncSession):
 
         except Exception as e:
             logger.error(f"Error processing user {user.name or user.email} (ID: {user.id}) for step reminders: {e}")
+    
+    logger.info(f"Finished sending step reminders. Total users reminded: {reminder_count}")
+    return reminder_count
