@@ -2,6 +2,7 @@ from datetime import date
 from operator import and_, or_
 import select
 from fastapi import APIRouter, Depends, Query
+from sqlalchemy import func
 from sqlalchemy.ext.asyncio import AsyncSession
 from typing import Optional, List
 

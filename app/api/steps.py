@@ -107,7 +107,15 @@ async def get_weekly_steps(
         challenge, participant = challenge_data
         if participant.selected_daily_target:
             daily_target = float(participant.selected_daily_target)
-            period_target = daily_target * 7
+            # Calculate period_target based on join date
+            join_date = participant.joined_at.date() if hasattr(participant.joined_at, 'date') else participant.joined_at
+            # If joined this week, use days left
+            if join_date > period_start:
+                days_left = (period_end - join_date).days + 1
+                days_left = max(days_left, 0)
+                period_target = daily_target * days_left
+            else:
+                period_target = daily_target * 7
     
     # Get steps for the week
     steps_stmt = select(DailySteps).where(

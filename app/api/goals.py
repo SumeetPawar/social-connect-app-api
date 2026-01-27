@@ -78,11 +78,16 @@ async def set_daily_target(
     await db.commit()
     await db.refresh(participant)
 
+    # Calculate weekly_target based on join date (today)
+    join_date = datetime.now(ZoneInfo(user.timezone or "Asia/Kolkata")).date()
+    days_left = (challenge.end_date - join_date).days + 1
+    days_left = max(days_left, 0)  # Prevent negative if joined after end
+    weekly_target = participant.selected_daily_target * days_left if participant.selected_daily_target else 0
     return {
         "challenge_id": str(challenge.id),
         "challenge_title": challenge.title,
         "daily_target": participant.selected_daily_target,
-        "weekly_target": participant.selected_daily_target * 7,
+        "weekly_target": weekly_target,
         "challenge_start": challenge.start_date,
         "challenge_end": challenge.end_date,
     }
@@ -127,11 +132,16 @@ async def get_current_goal(
             detail="You've joined the challenge but haven't set a daily target yet."
         )
 
+    # Calculate weekly_target based on join date (participant.joined_at)
+    join_date = participant.joined_at.date() if hasattr(participant.joined_at, 'date') else participant.joined_at
+    days_left = (challenge.end_date - join_date).days + 1
+    days_left = max(days_left, 0)
+    weekly_target = participant.selected_daily_target * days_left if participant.selected_daily_target else 0
     return {
         "challenge_id": str(challenge.id),
         "challenge_title": challenge.title,
         "daily_target": participant.selected_daily_target,
-        "weekly_target": participant.selected_daily_target * 7,
+        "weekly_target": weekly_target,
         "challenge_start": challenge.start_date,
         "challenge_end": challenge.end_date,
         "has_target_set": True,
