@@ -13,19 +13,51 @@ from app.api.challenges import router as challenges_router
 from app.api.goal_definitions import router as goal_definitions_router
 from fastapi.middleware.cors import CORSMiddleware
 from contextlib import asynccontextmanager
-from app.services.scheduler import start_scheduler, stop_scheduler
-
+import asyncio
 import logging
+
 logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
+
+# Import scheduler
+try:
+    from app.services.scheduler import scheduler
+    SCHEDULER_AVAILABLE = True
+except ImportError:
+    SCHEDULER_AVAILABLE = False
+    scheduler = None
+    logger.warning("Scheduler not available")
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    # Startup: Start the reminder scheduler
-    start_scheduler()
+    # Startup
+    logger.info("App lifespan starting")
+    
+    # Start scheduler in the main event loop (not in executor)
+    if SCHEDULER_AVAILABLE and scheduler:
+        try:
+            logger.info("Starting scheduler...")
+            # Start scheduler directly - it will use the current event loop
+            if not scheduler.running:
+                scheduler.start()
+                logger.info("Scheduler started successfully")
+        except Exception as e:
+            logger.error(f"Scheduler startup failed: {e}", exc_info=True)
+    
+    logger.info("App startup complete")
+    
     yield
-    # Shutdown: Stop the scheduler
-    stop_scheduler()
+    
+    # Shutdown
+    logger.info("App shutting down")
+    if SCHEDULER_AVAILABLE and scheduler:
+        try:
+            if scheduler.running:
+                scheduler.shutdown(wait=False)
+                logger.info("Scheduler stopped")
+        except Exception as e:
+            logger.error(f"Scheduler shutdown error: {e}")
 
 
 app = FastAPI(title=settings.APP_NAME, lifespan=lifespan)

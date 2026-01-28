@@ -7,6 +7,7 @@ import logging
 
 logger = logging.getLogger(__name__)
 
+# Create scheduler instance - will be started from main.py
 scheduler = AsyncIOScheduler()
 
 
@@ -21,21 +22,12 @@ async def check_and_send_reminders():
             logger.error(f"Error in reminder job: {e}", exc_info=True)
 
 
-def start_scheduler():
-    """Start the background scheduler for hourly reminders"""
-    logger.info("Initializing step reminder scheduler")
-    # Run every hour from 9 AM to 11 PM
-    scheduler.add_job(
-        check_and_send_reminders,
-        CronTrigger(hour='9-23', minute=0),  # Every hour on the hour from 9 AM to 11 PM
-        id='step_reminders',
-        replace_existing=True
-    )
-    scheduler.start()
-    logger.info("Step reminder scheduler started - will run every hour from 9 AM to 11 PM")
-
-
-def stop_scheduler():
-    """Stop the scheduler"""
-    scheduler.shutdown()
-    logger.info("Stopped reminder scheduler")
+# Configure the job when module loads (but don't start scheduler yet)
+logger.info("Configuring step reminder job")
+scheduler.add_job(
+    check_and_send_reminders,
+    CronTrigger(hour='9-23', minute=0),  # Every hour on the hour from 9 AM to 11 PM
+    id='step_reminders',
+    replace_existing=True
+)
+logger.info("Step reminder job configured - will run every hour from 9 AM to 11 PM")
