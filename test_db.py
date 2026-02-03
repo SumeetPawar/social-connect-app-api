@@ -4,7 +4,7 @@ import asyncpg
 async def test_connection():
     try:
         # Connect to database
-        conn = await asyncpg.connect('postgresql://fitness:fitnesspass@localhost:5432/fitnessdb')
+        conn = await asyncpg.connect('postgresql://gesadmin:Markmywords%4089@ges-social-pg-prod.postgres.database.azure.com/fitness_tracker')
         
         # Test 1: Check connection
         version = await conn.fetchval('SELECT version()')

@@ -1,8 +1,6 @@
 from datetime import date
-from operator import and_, or_
-import select
 from fastapi import APIRouter, Depends, Query
-from sqlalchemy import func
+from sqlalchemy import func, select, and_, or_
 from sqlalchemy.ext.asyncio import AsyncSession
 from typing import Optional, List
 
@@ -52,12 +50,14 @@ async def get_available_challenges(
     # Main query
     stmt = select(Challenge).where(
         and_(
-            Challenge.status == 'active',
-            Challenge.end_date >= today,
-            or_(
-                Challenge.id.in_(dept_subquery),
-                Challenge.id.in_(company_wide_subquery)
-            )
+        Challenge.status == 'active',
+            and_(
+                Challenge.end_date >= today,
+                or_(
+                    Challenge.id.in_(dept_subquery),
+                    Challenge.id.in_(company_wide_subquery)
+                )
+          )
         )
     ).order_by(Challenge.start_date)
     
@@ -93,11 +93,11 @@ async def get_available_challenges(
         
         # Check if user already joined
         part_stmt = select(ChallengeParticipant).where(
-            and_(
+            and_(*[
                 ChallengeParticipant.challenge_id == challenge.id,
                 ChallengeParticipant.user_id == current_user.id,
                 ChallengeParticipant.left_at.is_(None)
-            )
+            ])
         )
         part_result = await db.execute(part_stmt)
         participant = part_result.scalar_one_or_none()

@@ -188,6 +188,7 @@ class Challenge(Base):
         server_default=text("gen_random_uuid()"),
     )
     title: Mapped[str] = mapped_column(Text, nullable=False)
+    description: Mapped[str | None] = mapped_column(Text, nullable=True)
     period: Mapped[str] = mapped_column(Text, nullable=False)
     scope: Mapped[str] = mapped_column(Text, nullable=False)
     start_date: Mapped[str] = mapped_column(Date, nullable=False)
