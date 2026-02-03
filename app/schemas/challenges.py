@@ -231,6 +231,7 @@ class AvailableChallengeResponse(BaseModel):
     """Available challenge with user participation info"""
     id: str
     title: str
+    description: Optional[str]
     period: str
     scope: str
     start_date: date

@@ -31,12 +31,12 @@ async def signup(payload: SignupIn, db: AsyncSession = Depends(get_db)):
         raise HTTPException(status_code=400, detail="Email already registered")
     
     # Get or create default department
-    dept_q = await db.execute(select(Department).where(Department.name == "General"))
+    dept_q = await db.execute(select(Department).where(Department.name == "GESBMS"))
     department = dept_q.scalar_one_or_none()
     
     if not department:
         # Create default department if it doesn't exist
-        department = Department(name="General")
+        department = Department(name="GESBMS")
         db.add(department)
         await db.flush()  # Get department.id
     

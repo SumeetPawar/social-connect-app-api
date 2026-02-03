@@ -105,6 +105,7 @@ async def get_available_challenges(
         response.append(AvailableChallengeResponse(
             id=str(challenge.id),
             title=challenge.title,
+            description=challenge.description,  # ✅ add this
             period=challenge.period,
             scope=challenge.scope,
             start_date=challenge.start_date,
