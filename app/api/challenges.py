@@ -114,7 +114,15 @@ async def get_available_challenges(
             min_goals_required=challenge.min_goals_required,
             created_by=str(challenge.created_by) if challenge.created_by else None,
             created_at=challenge.created_at,
-            metrics=[ChallengeMetricResponse.model_validate(m) for m in metrics],
+            metrics=[
+                ChallengeMetricResponse(
+                    id=str(m.id),
+                    challenge_id=str(m.challenge_id),
+                    metric_key=m.metric_key,
+                    target_value=m.target_value,
+                    rule_type=m.rule_type
+                ) for m in metrics
+            ],
             department_ids=department_ids,
             participant_count=participant_count,
             user_joined=participant is not None,
