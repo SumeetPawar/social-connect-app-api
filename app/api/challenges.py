@@ -1,6 +1,7 @@
-from datetime import date
-from fastapi import APIRouter, Depends, Query
-from sqlalchemy import func, select, and_, or_
+from datetime import date, timedelta
+from uuid import UUID
+from fastapi import APIRouter, Depends, HTTPException, Query
+from sqlalchemy import func, select, and_, or_, text
 from sqlalchemy.ext.asyncio import AsyncSession
 from typing import Optional, List
 
@@ -158,7 +159,6 @@ async def create_challenge(
         challenge_data
     )
 
-
 @router.get("", response_model=ChallengeListResponse)
 async def list_challenges(
     status: Optional[str] = Query(None, description="Filter by status"),
@@ -187,6 +187,104 @@ async def list_challenges(
         page_size
     )
 
+@router.get("/{challenge_id}/my-progress")
+async def get_my_challenge_week_progress(
+    challenge_id: UUID,
+    start_date: date = Query(..., description="Week start date (Monday)"),
+    end_date: date = Query(..., description="Week end date (Sunday)"),
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db)
+):
+    """
+    Get user's steps for a specific week within a specific challenge
+    """
+    
+    # Get challenge info
+    challenge_query = text("""
+        SELECT id, title, start_date, end_date, status, period, scope
+        FROM challenges
+        WHERE id = :challenge_id
+    """)
+    
+    result = await db.execute(challenge_query, {"challenge_id": challenge_id})
+    challenge = result.mappings().first()
+    
+    if not challenge:
+        raise HTTPException(status_code=404, detail="Challenge not found")
+    
+    # Get user's daily target (from participation)
+    participant_query = text("""
+        SELECT selected_daily_target
+        FROM challenge_participants
+        WHERE challenge_id = :challenge_id 
+        AND user_id = :user_id 
+        AND left_at IS NULL
+    """)
+    
+    result = await db.execute(
+        participant_query, 
+        {"challenge_id": challenge_id, "user_id": current_user.id}
+    )
+    participant = result.mappings().first()
+    
+    if not participant:
+        raise HTTPException(
+            status_code=403, 
+            detail="You are not a participant in this challenge"
+        )
+    
+    daily_target = participant['selected_daily_target'] or 5000
+    
+    # Get steps for the requested week
+    steps_query = text("""
+        SELECT day, steps as total_steps
+        FROM daily_steps
+        WHERE user_id = :user_id
+        AND day >= :start_date
+        AND day <= :end_date
+        ORDER BY day
+    """)
+    
+    result = await db.execute(
+        steps_query,
+        {
+            "user_id": current_user.id,
+            "start_date": start_date,
+            "end_date": end_date
+        }
+    )
+    steps_data = result.mappings().all()
+    
+    # Build 7-day array (Mon-Sun)
+    days_array = []
+    week_total = 0
+    current_day = start_date
+    
+    while current_day <= end_date:
+        day_data = next((d for d in steps_data if d['day'] == current_day), None)
+        steps = day_data['total_steps'] if day_data else 0
+        week_total += steps
+        
+        days_array.append({
+            "day": str(current_day),
+            "total_steps": steps
+        })
+        
+        current_day += timedelta(days=1)
+    
+    return {
+        "challenge_id": str(challenge['id']),
+        "challenge_title": challenge['title'],
+        "challenge_start": str(challenge['start_date']),
+        "challenge_end": str(challenge['end_date']),
+        "challenge_status": challenge['status'],
+        "week_start": str(start_date),
+        "week_end": str(end_date),
+        "goal_daily_target": daily_target,
+        "goal_period_target": daily_target * 7,
+        "week_total_steps": week_total,
+        "days": days_array
+    }
 
 @router.get("/my", response_model=List[ChallengeParticipantStatsResponse])
 async def get_my_challenges(
