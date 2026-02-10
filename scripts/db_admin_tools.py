@@ -23,7 +23,8 @@ import os
 # Add a goal for a user:
 #   python scripts/db_admin_tools.py add_goal <user_id> <metric_key> <day> <value_num> <value_bool>
 
-DB_URL = os.environ.get('DATABASE_URL', 'postgresql://fitness:fitnesspass@localhost:5432/fitnessdb')
+# DB_URL = os.environ.get('DATABASE_URL', 'postgresql://fitness:fitnesspass@localhost:5432/fitnessdb')
+DB_URL = 'postgresql://gesadmin:Markmywords%4089@ges-social-pg-prod.postgres.database.azure.com/fitness_tracker'
 
 async def list_users():
     conn = await asyncpg.connect(DB_URL)
@@ -120,7 +121,7 @@ if __name__ == '__main__':
         asyncio.run(delete_challenge(sys.argv[2]))
     elif cmd == 'delete_all_challenges':
         asyncio.run(delete_all_challenges())
-    elif cmd == 'add_challenge' and len(sys.argv) == 8:
+    elif cmd == 'add_challenge' and len(sys.argv) == 9:
         # Usage: add_challenge <title> <period> <scope> <start_date> <end_date> <status> <description>
         asyncio.run(add_challenge(
             sys.argv[2], sys.argv[3], sys.argv[4], sys.argv[5], sys.argv[6], sys.argv[7], sys.argv[8]

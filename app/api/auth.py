@@ -2,7 +2,7 @@ import hashlib
 from datetime import datetime, timedelta, timezone
 
 from fastapi import APIRouter, Depends, HTTPException, status
-from sqlalchemy import and_, select
+from sqlalchemy import and_, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import settings
@@ -14,7 +14,12 @@ from app.core.security import (
 )
 from app.db.deps import get_db
 from app.models import Department, User, RefreshToken
+
 from app.schemas.auth import RefreshIn, SignupIn, LoginIn, AuthOut
+
+
+# Import allowed emails list from separate file
+from app.core.allowed_signup_emails import ALLOWED_SIGNUP_EMAILS
 
 router = APIRouter(prefix="/api/auth", tags=["auth"])  # ✅ Changed from /auth to /api/auth
 
@@ -22,27 +27,33 @@ def sha256(s: str) -> str:
     return hashlib.sha256(s.encode("utf-8")).hexdigest()
 
 
+
 @router.post("/signup")
 async def signup(payload: SignupIn, db: AsyncSession = Depends(get_db)):
+    # Restrict signup to allowed emails
+    if str(payload.email).lower() not in [e.lower() for e in ALLOWED_SIGNUP_EMAILS]:
+        raise HTTPException(status_code=403, detail="Signup not allowed for this email")
+
     # Check if user exists
-    q = await db.execute(select(User).where(User.email == payload.email))
+   
+    q = await db.execute(select(User).where(func.lower(User.email) == str(payload.email).lower()))
     existing = q.scalar_one_or_none()
     if existing:
         raise HTTPException(status_code=400, detail="Email already registered")
-    
+
     # Get or create default department
     dept_q = await db.execute(select(Department).where(Department.name == "GESBMS"))
     department = dept_q.scalar_one_or_none()
-    
+
     if not department:
         # Create default department if it doesn't exist
         department = Department(name="GESBMS")
         db.add(department)
         await db.flush()  # Get department.id
-    
+
     # Hash password
     hashed = hash_password(payload.password)
-    
+
     # Create user WITH department_id
     user = User(
         name=payload.name,
@@ -50,11 +61,11 @@ async def signup(payload: SignupIn, db: AsyncSession = Depends(get_db)):
         password_hash=hashed,
         department_id=department.id  # ← ADD THIS LINE
     )
-    
+
     db.add(user)
     await db.flush()  # get user.id
     await db.refresh(user)
-    
+
     access = create_access_token(str(user.id))
     refresh_raw = create_refresh_token()
 

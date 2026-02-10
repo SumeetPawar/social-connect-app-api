@@ -26,7 +26,7 @@ EXPOSE 8000
 # Run migrations and start server
 CMD alembic upgrade head && \
     gunicorn app.main:app \
-    --workers 1 \
+    --workers 4 \
     --worker-class uvicorn.workers.UvicornWorker \
     --bind 0.0.0.0:8000 \
     --timeout 120 \
