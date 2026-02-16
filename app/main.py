@@ -1,4 +1,5 @@
 from fastapi import FastAPI, Request
+from app.api import admin
 from app.core.config import settings
 from app.api.health import router as health_router
 from app.api.ws import router as ws_router
@@ -9,6 +10,7 @@ from app.api.steps import router as steps_router
 from app.api.goals import router as goals_router
 # from app.api.streaks import router as streaks_router
 from app.api.push import router as push_router
+from app.api.admin import router as admin_router
 from app.api.challenges import router as challenges_router
 from app.api.goal_definitions import router as goal_definitions_router
 from fastapi.middleware.cors import CORSMiddleware
@@ -81,6 +83,8 @@ app.include_router(goals_router)
 app.include_router(push_router)
 app.include_router(goal_definitions_router)
 app.include_router(challenges_router)
+app.include_router(admin_router)  # Add this line
+
 
 if __name__ == "__main__":
     import os

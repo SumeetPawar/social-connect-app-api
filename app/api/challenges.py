@@ -212,9 +212,13 @@ async def get_my_challenge_week_progress(
     if not challenge:
         raise HTTPException(status_code=404, detail="Challenge not found")
     
-    # Get user's daily target (from participation)
+    # Get user's daily target AND streak info (READ ONLY - already saved)
     participant_query = text("""
-        SELECT selected_daily_target
+        SELECT 
+            selected_daily_target,
+            challenge_current_streak,
+            challenge_longest_streak,
+            last_activity_date
         FROM challenge_participants
         WHERE challenge_id = :challenge_id 
         AND user_id = :user_id 
@@ -235,6 +239,16 @@ async def get_my_challenge_week_progress(
     
     daily_target = participant['selected_daily_target'] or 5000
     
+    # ========== CALCULATE VALID DATE RANGE ==========
+    challenge_start = challenge['start_date']
+    challenge_end = challenge['end_date']
+    
+    actual_start = max(start_date, challenge_start)
+    actual_end = min(end_date, challenge_end)
+    
+    valid_days_count = (actual_end - actual_start).days + 1 if actual_end >= actual_start else 0
+    # ================================================
+    
     # Get steps for the requested week
     steps_query = text("""
         SELECT day, steps as total_steps
@@ -249,8 +263,8 @@ async def get_my_challenge_week_progress(
         steps_query,
         {
             "user_id": current_user.id,
-            "start_date": start_date,
-            "end_date": end_date
+            "start_date": actual_start,
+            "end_date": actual_end
         }
     )
     steps_data = result.mappings().all()
@@ -261,16 +275,36 @@ async def get_my_challenge_week_progress(
     current_day = start_date
     
     while current_day <= end_date:
-        day_data = next((d for d in steps_data if d['day'] == current_day), None)
-        steps = day_data['total_steps'] if day_data else 0
-        week_total += steps
+        is_valid_day = (challenge_start <= current_day <= challenge_end)
         
-        days_array.append({
-            "day": str(current_day),
-            "total_steps": steps
-        })
+        if is_valid_day:
+            day_data = next((d for d in steps_data if d['day'] == current_day), None)
+            steps = day_data['total_steps'] if day_data else 0
+            week_total += steps
+            
+            days_array.append({
+                "day": str(current_day),
+                "total_steps": steps,
+                "goal_met": steps >= daily_target,
+                "is_challenge_day": True
+            })
+        else:
+            days_array.append({
+                "day": str(current_day),
+                "total_steps": 0,
+                "goal_met": False,
+                "is_challenge_day": False
+            })
         
         current_day += timedelta(days=1)
+    
+    # ========== JUST READ STREAK FROM DATABASE (Don't recalculate) ==========
+    streak = {
+        "current_streak": participant['challenge_current_streak'],
+        "longest_streak": participant['challenge_longest_streak'],
+        "last_activity_date": str(participant['last_activity_date']) if participant['last_activity_date'] else None
+    }
+    # ========================================================================
     
     return {
         "challenge_id": str(challenge['id']),
@@ -280,12 +314,217 @@ async def get_my_challenge_week_progress(
         "challenge_status": challenge['status'],
         "week_start": str(start_date),
         "week_end": str(end_date),
+        "valid_days_in_week": valid_days_count,
         "goal_daily_target": daily_target,
-        "goal_period_target": daily_target * 7,
+        "goal_period_target": daily_target * valid_days_count,
         "week_total_steps": week_total,
-        "days": days_array
+        "days": days_array,
+        "streak": streak
     }
-
+    
+@router.get("/{challenge_id}/leaderboard")
+async def get_challenge_leaderboard(
+    challenge_id: UUID,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db)
+):
+    """
+    Get leaderboard for a specific challenge.
+    Shows all participants ranked by total steps or completion percentage.
+    """
+    
+    # Get challenge info
+    challenge_query = text("""
+        SELECT id, title, start_date, end_date, status
+        FROM challenges
+        WHERE id = :challenge_id
+    """)
+    
+    result = await db.execute(challenge_query, {"challenge_id": challenge_id})
+    challenge = result.mappings().first()
+    
+    if not challenge:
+        raise HTTPException(status_code=404, detail="Challenge not found")
+    
+    # Calculate days left
+    from datetime import date
+    today = date.today()
+    days_left = (challenge['end_date'] - today).days if challenge['end_date'] >= today else 0
+    
+    # Calculate total days in challenge SO FAR (not full duration)
+    start_date = challenge['start_date']
+    end_date = challenge['end_date']
+    challenge_end_or_today = min(end_date, today)
+    total_challenge_days = (challenge_end_or_today - start_date).days + 1
+    
+    # Get total participants count
+    participants_count_query = text("""
+        SELECT COUNT(*) as total
+        FROM challenge_participants
+        WHERE challenge_id = :challenge_id
+        AND left_at IS NULL
+    """)
+    
+    result = await db.execute(participants_count_query, {"challenge_id": challenge_id})
+    participants_count = result.scalar()
+    
+    # Get leaderboard data with completion percentage
+    leaderboard_query = text("""
+        WITH user_totals AS (
+            SELECT 
+                cp.user_id,
+                u.name,
+                cp.selected_daily_target,
+                cp.challenge_current_streak,
+                cp.challenge_longest_streak,
+                COALESCE(SUM(ds.steps), 0) as total_steps,
+                COALESCE(AVG(ds.steps), 0) as avg_steps,
+                -- Count days where user met their goal
+                COUNT(DISTINCT ds.day) FILTER (
+                    WHERE ds.steps >= cp.selected_daily_target
+                ) as days_met_goal,
+                -- Count total days with ANY steps logged
+                COUNT(DISTINCT ds.day) as days_logged
+            FROM challenge_participants cp
+            JOIN users u ON u.id = cp.user_id
+            LEFT JOIN daily_steps ds ON ds.user_id = cp.user_id 
+                AND ds.day >= :start_date 
+                AND ds.day <= :end_date_or_today
+            WHERE cp.challenge_id = :challenge_id
+            AND cp.left_at IS NULL
+            GROUP BY cp.user_id, u.name, cp.selected_daily_target, cp.challenge_current_streak, cp.challenge_longest_streak
+        ),
+        ranked AS (
+            SELECT 
+                user_id,
+                name,
+                selected_daily_target as goal,
+                challenge_current_streak as streak,
+                challenge_longest_streak as longest_streak,
+                total_steps,
+                avg_steps,
+                days_met_goal,
+                days_logged,
+                -- Calculate completion percentage
+                CASE 
+                    WHEN :total_days > 0 THEN 
+                        ROUND((days_met_goal::numeric / :total_days) * 100, 1)
+                    ELSE 0 
+                END as completion_pct,
+                RANK() OVER (ORDER BY total_steps DESC) as rank
+            FROM user_totals
+        )
+        SELECT 
+            rank,
+            user_id,
+            name,
+            goal,
+            streak,
+             longest_streak,
+            total_steps,
+            avg_steps,
+            days_met_goal,
+            days_logged,
+            completion_pct
+        FROM ranked
+        ORDER BY rank
+        LIMIT 100
+    """)
+    
+    result = await db.execute(
+        leaderboard_query,
+        {
+            "challenge_id": challenge_id,
+            "start_date": start_date,
+            "end_date_or_today": challenge_end_or_today,
+            "total_days": total_challenge_days
+        }
+    )
+    leaderboard_data = result.mappings().all()
+    
+    # Find current user in leaderboard
+    my_rank = None
+    my_total_steps = 0
+    my_streak = 0
+    my_longest_streak = 0
+    my_daily_avg = 0
+    my_goal = 0
+    my_days_met_goal = 0
+    my_completion_pct = 0
+    
+    for user in leaderboard_data:
+        if str(user['user_id']) == str(current_user.id):
+            my_rank = user['rank']
+            my_total_steps = user['total_steps']
+            my_streak = user['streak']
+            my_longest_streak = max(user.get('longest_streak', 0) or 0, user['streak'])
+            my_daily_avg = round(user['avg_steps'])
+            my_goal = user['goal']
+            my_days_met_goal = user['days_met_goal']
+            my_completion_pct = user['completion_pct']
+            break
+    
+    # Format leaderboard
+    leaderboard = []
+    for user in leaderboard_data:
+        # Get initials
+        name_parts = user['name'].split() if user['name'] else ['?', '?']
+        initials = ''.join([part[0].upper() for part in name_parts[:2]])
+        
+        leaderboard.append({
+            "rank": user['rank'],
+            "user_id": str(user['user_id']),
+            "name": user['name'],
+            "initials": initials,
+            "total_steps": user['total_steps'],
+            "streak": user['streak'],
+            "longest_streak": max(user.get('longest_streak', 0) or 0, user['streak']),
+            "days_met_goal": user['days_met_goal'],
+            "days_logged": user['days_logged'],
+            "completion_pct": float(user['completion_pct']),
+            "is_me": str(user['user_id']) == str(current_user.id),
+            "is_top": user['rank'] == 1
+        })
+    
+    # Determine badge based on rank
+    badge = None
+    if my_rank:
+        if my_rank <= 3:
+            badge = "Elite"
+        elif my_rank <= 10:
+            badge = "Pro"
+        elif my_rank <= 25:
+            badge = "Rising"
+    
+    # Calculate completion percentage (based on user's goal)
+    challenge_completion_pct = 0
+    if my_goal and my_goal > 0:
+        total_days = (end_date - start_date).days + 1
+        target_total = my_goal * total_days
+        challenge_completion_pct = round((my_total_steps / target_total) * 100) if target_total > 0 else 0
+    
+    return {
+        "challenge_id": str(challenge['id']),
+        "challenge_title": challenge['title'],
+        "challenge_goal": my_goal * ((end_date - start_date).days + 1) if my_goal else 200000,
+        "start_date": str(start_date),
+        "end_date": str(end_date),
+        "days_left": max(days_left, 0),
+        "total_participants": participants_count,
+        "completion_pct": challenge_completion_pct,
+        "total_challenge_days": total_challenge_days,  # NEW
+        "my_longest_streak": my_longest_streak,  # ADD THIS
+        "my_rank": my_rank,
+        "my_total_steps": my_total_steps,
+        "my_streak": my_streak,
+        "my_daily_avg": my_daily_avg,
+        "my_badge": badge,
+        "my_days_met_goal": my_days_met_goal,  # NEW
+        "my_completion_pct": my_completion_pct,  # NEW
+        
+        "leaderboard": leaderboard
+    }
+    
 @router.get("/my", response_model=List[ChallengeParticipantStatsResponse])
 async def get_my_challenges(
     current_user: User = Depends(get_current_user),

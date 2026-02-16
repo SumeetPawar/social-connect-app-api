@@ -1,6 +1,6 @@
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select, and_, func
+from sqlalchemy import select, and_, func, text
 from datetime import date, datetime, timedelta
 from zoneinfo import ZoneInfo
 from typing import Optional
@@ -16,8 +16,169 @@ from app.schemas.steps import (
     WeekProgressDay
 )
 
+async def calculate_challenge_streak(
+    user_id: str,
+    challenge_id: str,
+    db: AsyncSession
+) -> dict:
+    """
+    Calculate streak from all saved data for this challenge.
+    NOW SAVES TO DATABASE!
+    """
+    from datetime import timedelta
+    
+    # Get challenge dates
+    challenge_query = text("""
+        SELECT start_date, end_date
+        FROM challenges
+        WHERE id = :challenge_id
+    """)
+    
+    result = await db.execute(challenge_query, {"challenge_id": challenge_id})
+    challenge = result.mappings().first()
+    
+    if not challenge:
+        return {
+            "current_streak": 0,
+            "longest_streak": 0,
+            "days_logged": 0,
+            "days_met_goal": 0,
+            "total_days": 0,
+            "completion_rate": 0
+        }
+    
+    # Get participant's daily target
+    participant_query = text("""
+        SELECT selected_daily_target
+        FROM challenge_participants
+        WHERE challenge_id = :challenge_id 
+        AND user_id = :user_id 
+        AND left_at IS NULL
+    """)
+    
+    result = await db.execute(
+        participant_query, 
+        {"challenge_id": challenge_id, "user_id": user_id}
+    )
+    participant = result.mappings().first()
+    
+    if not participant:
+        return {
+            "current_streak": 0,
+            "longest_streak": 0,
+            "days_logged": 0,
+            "days_met_goal": 0,
+            "total_days": 0,
+            "completion_rate": 0
+        }
+    
+    daily_target = participant['selected_daily_target']
+    start_date = challenge['start_date']
+    end_date = challenge['end_date']
+    
+    # Get all steps for challenge period
+    steps_query = text("""
+        SELECT day, steps
+        FROM daily_steps
+        WHERE user_id = :user_id
+        AND day >= :start_date
+        AND day <= :end_date
+        ORDER BY day DESC
+    """)
+    
+    result = await db.execute(
+        steps_query,
+        {
+            "user_id": user_id,
+            "start_date": start_date,
+            "end_date": end_date
+        }
+    )
+    daily_records = result.mappings().all()
+    
+    if not daily_records:
+        return {
+            "current_streak": 0,
+            "longest_streak": 0,
+            "days_logged": 0,
+            "days_met_goal": 0,
+            "total_days": (end_date - start_date).days + 1,
+            "completion_rate": 0
+        }
+    
+    # Create date lookup
+    steps_by_date = {record['day']: record['steps'] for record in daily_records}
+    
+    # Get last logged date
+    last_logged_date = max(steps_by_date.keys())
+    
+    # Calculate current streak (backwards from last logged)
+    current_streak = 0
+    current_day = last_logged_date
+    
+    while current_day >= start_date:
+        steps = steps_by_date.get(current_day, 0)
+        if steps >= daily_target:
+            current_streak += 1
+            current_day -= timedelta(days=1)
+        else:
+            break
+    
+    # Calculate longest streak (scan entire period)
+    longest_streak = 0
+    temp_streak = 0
+    days_met_goal = 0
+    
+    scan_day = start_date
+    while scan_day <= last_logged_date:
+        steps = steps_by_date.get(scan_day, 0)
+        
+        if steps >= daily_target:
+            temp_streak += 1
+            days_met_goal += 1
+            
+            if temp_streak > longest_streak:
+                longest_streak = temp_streak
+        else:
+            temp_streak = 0
+        
+        scan_day += timedelta(days=1)
+    
+    # ========== SAVE TO DATABASE ==========
+    update_query = text("""
+        UPDATE challenge_participants
+        SET 
+            challenge_current_streak = :current_streak,
+            challenge_longest_streak = :longest_streak,
+            last_activity_date = :last_activity_date
+        WHERE challenge_id = :challenge_id 
+        AND user_id = :user_id
+    """)
+    
+    await db.execute(
+        update_query,
+        {
+            "current_streak": current_streak,
+            "longest_streak": max(longest_streak, current_streak),
+            "last_activity_date": last_logged_date,
+            "challenge_id": challenge_id,
+            "user_id": user_id
+        }
+    )
+    
+    await db.commit()
+    # ======================================
+    
+    return {
+        "current_streak": current_streak,
+        "longest_streak": max(longest_streak, current_streak),
+        "days_logged": len(daily_records),
+        "days_met_goal": days_met_goal,
+        "total_days": (end_date - start_date).days + 1,
+        "completion_rate": round((days_met_goal / ((last_logged_date - start_date).days + 1)) * 100, 1) if last_logged_date >= start_date else 0
+    }
+    
 router = APIRouter(prefix="/api/steps", tags=["Steps"])
-
 
 @router.post("/add", response_model=StepsAddResponse)
 async def add_steps(
@@ -28,6 +189,7 @@ async def add_steps(
     """
     Add steps for a specific date.
     Creates or updates the daily_steps record.
+    Recalculates streaks for all active challenges.
     """
     log_date = payload.day or date.today()
     
@@ -41,8 +203,12 @@ async def add_steps(
     result = await db.execute(stmt)
     daily_steps = result.scalar_one_or_none()
     
+    steps_changed = False
+    
     if daily_steps:
-        daily_steps.steps = payload.steps
+        if daily_steps.steps != payload.steps:  # Only if changed
+            daily_steps.steps = payload.steps
+            steps_changed = True
     else:
         # Create new
         daily_steps = DailySteps(
@@ -51,12 +217,40 @@ async def add_steps(
             steps=payload.steps
         )
         db.add(daily_steps)
+        steps_changed = True
     
     await db.commit()
     await db.refresh(daily_steps)
     
+    # ========== RECALCULATE STREAKS IF STEPS CHANGED ==========
+    if steps_changed:
+        # Find all active challenges that include this date
+        challenges_query = text("""
+            SELECT DISTINCT c.id
+            FROM challenges c
+            JOIN challenge_participants cp ON cp.challenge_id = c.id
+            WHERE cp.user_id = :user_id
+            AND cp.left_at IS NULL
+            AND :log_date BETWEEN c.start_date AND c.end_date
+        """)
+        
+        result = await db.execute(
+            challenges_query,
+            {"user_id": current_user.id, "log_date": log_date}
+        )
+        active_challenges = result.scalars().all()
+        
+        # Update streak for each affected challenge
+        for challenge_id in active_challenges:
+            await calculate_challenge_streak(
+                user_id=str(current_user.id),
+                challenge_id=str(challenge_id),
+                db=db
+            )
+    # =========================================================
+    
     return {
-        "log_id": f"{daily_steps.user_id}_{daily_steps.day}", #remove if not needed
+        "log_id": f"{daily_steps.user_id}_{daily_steps.day}",
         "day": daily_steps.day,
         "added_steps": payload.steps,
         "day_total": daily_steps.steps

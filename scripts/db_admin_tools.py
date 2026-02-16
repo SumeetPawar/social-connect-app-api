@@ -21,7 +21,11 @@ import os
 # List all goals for a user:
 #   python scripts/db_admin_tools.py list_goals <user_id>
 # Add a goal for a user:
-#   python scripts/db_admin_tools.py add_goal <user_id> <metric_key> <day> <value_num> <value_bool>
+#   python scripts/db_admin_tools.py add_goal <user_id> <metric_key> <day> <value_num> <value_bool>   
+# Make admin                    
+# python scripts/db_admin_tools.py set-admin 550e8400-e29b-41d4-a716-...  
+# Show admins
+# python scripts/db_admin_tools.py list-admins                            
 
 # DB_URL = os.environ.get('DATABASE_URL', 'postgresql://fitness:fitnesspass@localhost:5432/fitnessdb')
 DB_URL = 'postgresql://gesadmin:Markmywords%4089@ges-social-pg-prod.postgres.database.azure.com/fitness_tracker'
@@ -97,6 +101,75 @@ async def add_goal(user_id, metric_key, day, value_num, value_bool):
     print(f'Added goal for user {user_id} on {day} ({metric_key})')
     await conn.close()
 
+async def set_admin(user_id: str):
+    """Set a user as admin by their ID"""
+    conn = await asyncpg.connect(DB_URL)
+
+    # Update user role to admin
+    result = await conn.execute(
+        'UPDATE users SET role = $1 WHERE id = $2',
+        'admin',
+        user_id
+    )
+
+    if result == "UPDATE 0":
+        print(f"❌ User with ID {user_id} not found")
+    else:
+        # Fetch updated user
+        user = await conn.fetchrow(
+            'SELECT id, name, email, role FROM users WHERE id = $1',
+            user_id
+        )
+        print(f"✅ User set as admin:")
+        print(f"   ID: {user['id']}")
+        print(f"   Name: {user['name']}")
+        print(f"   Email: {user['email']}")
+        print(f"   Role: {user['role']}")
+
+    await conn.close()
+
+
+async def remove_admin(user_id: str):
+    """Remove admin role from a user"""
+    conn = await asyncpg.connect(DB_URL)
+
+    # Update user role to regular user
+    result = await conn.execute(
+        'UPDATE users SET role = $1 WHERE id = $2',
+        'user',
+        user_id
+    )
+
+    if result == "UPDATE 0":
+        print(f"❌ User with ID {user_id} not found")
+    else:
+        user = await conn.fetchrow(
+            'SELECT id, name, email, role FROM users WHERE id = $1',
+            user_id
+        )
+        print(f"✅ Admin role removed:")
+        print(f"   ID: {user['id']}")
+        print(f"   Name: {user['name']}")
+        print(f"   Email: {user['email']}")
+        print(f"   Role: {user['role']}")
+
+    await conn.close()
+
+
+async def list_admins():
+    """List all admin users"""
+    conn = await asyncpg.connect(DB_URL)
+    rows = await conn.fetch(
+        "SELECT id, name, email, role FROM users WHERE role = 'admin' ORDER BY created_at"
+    )
+
+    print(f'\n📋 Admin Users ({len(rows)}):')
+    for row in rows:
+        print(f"   {row['id']} | {row['name']} | {row['email']}")
+
+    await conn.close()
+
+
 if __name__ == '__main__':
     if len(sys.argv) < 2:
         print("Usage:")
@@ -109,6 +182,9 @@ if __name__ == '__main__':
         print("  python db_admin_tools.py list_challenges")
         print("  python db_admin_tools.py list_goals <user_id>")
         print("  python db_admin_tools.py add_goal <user_id> <metric_key> <day> <value_num> <value_bool>")
+        print("  python db_admin_tools.py set-admin <id>    - Make user admin")
+        print("  python db_admin_tools.py remove-admin <id> - Remove admin role")
+        print("  python db_admin_tools.py list-admins       - List all admins")
         sys.exit(1)
     cmd = sys.argv[1]
     if cmd == 'list_users':
@@ -132,5 +208,18 @@ if __name__ == '__main__':
         asyncio.run(list_goals(sys.argv[2]))
     elif cmd == 'add_goal' and len(sys.argv) == 7:
         asyncio.run(add_goal(sys.argv[2], sys.argv[3], sys.argv[4], sys.argv[5], sys.argv[6]))
+    elif cmd == "set-admin":
+        if len(sys.argv) < 3:
+            print("❌ Please provide user ID")
+            sys.exit(1)
+        asyncio.run(set_admin(sys.argv[2]))
+    elif cmd == "remove-admin":
+        if len(sys.argv) < 3:
+            print("❌ Please provide user ID")
+            sys.exit(1)
+        asyncio.run(remove_admin(sys.argv[2]))
+    elif cmd == "list-admins":
+        asyncio.run(list_admins())
     else:
         print("Invalid command or missing argument.")
+

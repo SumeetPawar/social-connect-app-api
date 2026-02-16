@@ -6,4 +6,4 @@ router = APIRouter(prefix="/api/me", tags=["me"])
 
 @router.get("")
 async def me(user: User = Depends(get_current_user)):
-    return {"id": str(user.id), "email": user.email, "name": user.name}
+    return {"id": str(user.id), "email": user.email, "name": user.name,"role": user.role}
