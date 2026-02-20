@@ -111,11 +111,26 @@ async def calculate_challenge_streak(
     
     # Get last logged date
     last_logged_date = max(steps_by_date.keys())
-    
-    # Calculate current streak (backwards from last logged)
+
+    # --- Streak alive till yesterday logic ---
+    today = date.today()
+    # If today is in the data, check if today's target is met
+    if today in steps_by_date:
+        if steps_by_date[today] >= daily_target:
+            # Include today in streak
+            streak_end_day = today
+        else:
+            # Do not include today in streak
+            streak_end_day = today - timedelta(days=1)
+            # But only if yesterday is in the data, else use last_logged_date
+            if streak_end_day not in steps_by_date:
+                streak_end_day = last_logged_date
+    else:
+        streak_end_day = last_logged_date
+
+    # Calculate current streak (backwards from streak_end_day)
     current_streak = 0
-    current_day = last_logged_date
-    
+    current_day = streak_end_day
     while current_day >= start_date:
         steps = steps_by_date.get(current_day, 0)
         if steps >= daily_target:
