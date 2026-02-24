@@ -247,6 +247,10 @@ class ChallengeParticipant(Base):
     challenge_perfect_days: Mapped[int] = mapped_column(Integer, nullable=False, server_default=text("0"))
     challenge_total_score: Mapped[int] = mapped_column(Integer, nullable=False, server_default=text("0"))
     last_activity_date: Mapped[str | None] = mapped_column(Date, nullable=True)
+    # Stores the previous day's leaderboard rank for rank shift tracking
+    previous_rank: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    # Stores the previous day's consistency leaderboard rank
+    previous_consistency_rank: Mapped[int | None] = mapped_column(Integer, nullable=True)
 
 
 # ==========================================

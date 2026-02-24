@@ -44,6 +44,10 @@ async def lifespan(app: FastAPI):
             if not scheduler.running:
                 scheduler.start()
                 logger.info("Scheduler started successfully")
+            # Run rank snapshot immediately on startup (non-blocking)
+            from app.services.scheduler import update_all_previous_ranks
+            asyncio.create_task(update_all_previous_ranks())
+            logger.info("Triggered initial previous_rank snapshot on startup")
         except Exception as e:
             logger.error(f"Scheduler startup failed: {e}", exc_info=True)
     
