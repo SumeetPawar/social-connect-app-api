@@ -53,7 +53,11 @@ class User(Base):
     global_longest_streak: Mapped[int] = mapped_column(Integer, nullable=False, server_default=text("0"))
     global_perfect_days: Mapped[int] = mapped_column(Integer, nullable=False, server_default=text("0"))
     last_streak_update: Mapped[str | None] = mapped_column(Date, nullable=True)
-    
+    # Body composition profile — for personalised ideal ranges
+    age: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    gender: Mapped[str | None] = mapped_column(Text, nullable=True)          # "male" | "female"
+    activity_level: Mapped[str | None] = mapped_column(Text, nullable=True)  # "sedentary"|"light"|"moderate"|"active"|"athlete"
+        
     created_at: Mapped[str] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)
     updated_at: Mapped[str] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)
 
@@ -173,7 +177,13 @@ class BodyMetrics(Base):
     bmi: Mapped[float | None] = mapped_column(Numeric(4, 2), nullable=True)
     notes: Mapped[str | None] = mapped_column(Text, nullable=True)
     created_at: Mapped[str] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)
-
+    # Extended scan fields (added migration 0005)
+    visceral_fat: Mapped[float | None] = mapped_column(Numeric(5, 1), nullable=True)
+    bone_mass_kg: Mapped[float | None] = mapped_column(Numeric(5, 2), nullable=True)
+    hydration_pct: Mapped[float | None] = mapped_column(Numeric(5, 1), nullable=True)
+    protein_pct: Mapped[float | None] = mapped_column(Numeric(5, 1), nullable=True)
+    bmr_kcal: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    metabolic_age: Mapped[int | None] = mapped_column(Integer, nullable=True)
 
 # ==========================================
 # 4. CHALLENGES

@@ -10,6 +10,7 @@ from app.api.steps import router as steps_router
 from app.api.goals import router as goals_router
 # from app.api.streaks import router as streaks_router
 from app.api.push import router as push_router
+from app.api.body_metrics import router as body_metrics_router
 from app.api.admin import router as admin_router
 from app.api.challenges import router as challenges_router
 from app.api.goal_definitions import router as goal_definitions_router
@@ -85,6 +86,9 @@ app.include_router(steps_router)
 app.include_router(goals_router)
 # app.include_router(streaks_router)
 app.include_router(push_router)
+
+app.include_router(body_metrics_router)
+
 app.include_router(goal_definitions_router)
 app.include_router(challenges_router)
 app.include_router(admin_router)  # Add this line
