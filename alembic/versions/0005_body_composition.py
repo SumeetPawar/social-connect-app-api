@@ -26,10 +26,11 @@ def upgrade():
     op.add_column('users', sa.Column('age',            sa.Integer,    nullable=True))
     op.add_column('users', sa.Column('gender',         sa.String(10), nullable=True))
     op.add_column('users', sa.Column('activity_level', sa.String(20), nullable=True))
-
+    op.add_column('users', sa.Column('height_cm',      sa.Numeric(5,2), nullable=True))
+    
 
 def downgrade():
     for col in ['visceral_fat','bone_mass_kg','hydration_pct','protein_pct','bmr_kcal','metabolic_age']:
         op.drop_column('body_metrics', col)
-    for col in ['age','gender','activity_level']:
+    for col in ['age','gender','activity_level','height_cm']:
         op.drop_column('users', col)

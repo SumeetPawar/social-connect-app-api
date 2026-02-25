@@ -57,6 +57,7 @@ class User(Base):
     age: Mapped[int | None] = mapped_column(Integer, nullable=True)
     gender: Mapped[str | None] = mapped_column(Text, nullable=True)          # "male" | "female"
     activity_level: Mapped[str | None] = mapped_column(Text, nullable=True)  # "sedentary"|"light"|"moderate"|"active"|"athlete"
+    height_cm: Mapped[float | None] = mapped_column(Numeric(5, 2), nullable=True)
         
     created_at: Mapped[str] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)
     updated_at: Mapped[str] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)
