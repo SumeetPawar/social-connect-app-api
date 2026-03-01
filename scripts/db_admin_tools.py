@@ -27,8 +27,8 @@ import os
 # Show admins
 # python scripts/db_admin_tools.py list-admins                            
 
-# DB_URL = os.environ.get('DATABASE_URL', 'postgresql://fitness:fitnesspass@localhost:5432/fitnessdb')
-DB_URL = 'postgresql://gesadmin:Markmywords%4089@ges-social-pg-prod.postgres.database.azure.com/fitness_tracker'
+DB_URL = os.environ.get('DATABASE_URL', 'postgresql://fitness:fitnesspass@localhost:5432/fitnessdb')
+# DB_URL = 'postgresql://gesadmin:Markmywordks%4089@ges-social-pg-prod.postgres.database.azure.com/fitness_tracker'
 
 async def list_users():
     conn = await asyncpg.connect(DB_URL)

@@ -23,42 +23,63 @@ router = APIRouter(prefix="/api/body-metrics", tags=["Body Metrics"])
 def _calc_bmi(weight_kg: float, height_cm: float) -> Optional[float]:
     if not weight_kg or not height_cm:
         return None
-    h = height_cm / 100
-    return round(weight_kg / (h * h), 1)
+    h = float(height_cm) / 100
+    return round(float(weight_kg) / (h * h), 1)
 
-
+# ─── Routes ─────────────────────────────────────────────────────────────────
 @router.post("", response_model=BodyMetricOut)
 async def save_scan(
     data: BodyMetricCreate,
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
-    """Save a new body composition scan for the logged-in user."""
-
-    # Use override height or fall back to user's stored height
     height = data.height_cm or getattr(current_user, "height_cm", None)
-
     bmi = _calc_bmi(data.weight_kg, height) if data.weight_kg else None
+    scan_date = data.recorded_date or date.today()
 
-    record = BodyMetrics(
-        user_id        = current_user.id,
-        recorded_date  = data.recorded_date or date.today(),
-        weight_kg      = data.weight_kg,
-        bmi            = bmi,
-        body_fat_pct   = data.body_fat_pct,
-        visceral_fat   = data.visceral_fat,
-        muscle_mass_kg = data.muscle_mass_kg,
-        bone_mass_kg   = data.bone_mass_kg,
-        hydration_pct  = data.hydration_pct,
-        protein_pct    = data.protein_pct,
-        bmr_kcal       = data.bmr_kcal,
-        metabolic_age  = data.metabolic_age,
+    # Check if a scan already exists for this user on this date
+    stmt = select(BodyMetrics).where(
+        BodyMetrics.user_id == current_user.id,
+        BodyMetrics.recorded_date == scan_date,
     )
-    db.add(record)
-    await db.commit()
-    await db.refresh(record)
-    return record
+    result = await db.execute(stmt)
+    existing = result.scalar_one_or_none()
 
+    if existing:
+        # Update existing record
+        existing.weight_kg      = data.weight_kg
+        existing.bmi            = bmi
+        existing.body_fat_pct   = data.body_fat_pct
+        existing.visceral_fat   = data.visceral_fat
+        existing.muscle_mass_kg = data.muscle_mass_kg
+        existing.bone_mass_kg   = data.bone_mass_kg
+        existing.hydration_pct  = data.hydration_pct
+        existing.protein_pct    = data.protein_pct
+        existing.bmr_kcal       = data.bmr_kcal
+        existing.metabolic_age  = data.metabolic_age
+        await db.commit()
+        await db.refresh(existing)
+        return existing
+    else:
+        # Insert new record
+        record = BodyMetrics(
+            user_id        = current_user.id,
+            recorded_date  = scan_date,
+            weight_kg      = data.weight_kg,
+            bmi            = bmi,
+            body_fat_pct   = data.body_fat_pct,
+            visceral_fat   = data.visceral_fat,
+            muscle_mass_kg = data.muscle_mass_kg,
+            bone_mass_kg   = data.bone_mass_kg,
+            hydration_pct  = data.hydration_pct,
+            protein_pct    = data.protein_pct,
+            bmr_kcal       = data.bmr_kcal,
+            metabolic_age  = data.metabolic_age,
+        )
+        db.add(record)
+        await db.commit()
+        await db.refresh(record)
+        return record
 
 @router.get("/latest", response_model=BodyMetricOut)
 async def get_latest(
