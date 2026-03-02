@@ -24,7 +24,7 @@ async def set_daily_target(
     Valid targets: 3000, 5000, 7500, or 10000 steps/day.
     """
     # Validate target
-    if payload.daily_target not in [3000, 5000, 7500, 10000]:
+    if payload.daily_target not in [3000, 5000, 7500, 8000, 9000, 10000]:
         raise HTTPException(
             status_code=400,
             detail="Daily target must be one of: 3000, 5000, 7500, or 10000"

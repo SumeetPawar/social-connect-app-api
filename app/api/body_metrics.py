@@ -6,7 +6,7 @@ All periods returned in a single /history call.
 """
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select
+from sqlalchemy import select, and_
 from datetime import date, timedelta
 from typing import Optional
 from pydantic import BaseModel
@@ -24,37 +24,65 @@ def _calc_bmi(weight_kg: float, height_cm: float) -> Optional[float]:
     if not weight_kg or not height_cm:
         return None
     h = height_cm / 100
-    return round(weight_kg / (h * h), 1)
+    return round(float(weight_kg) / float(h * h), 1)
 
 
-@router.post("", response_model=BodyMetricOut)
+@router.post("", response_model=BodyMetricOut) 
 async def save_scan(
     data: BodyMetricCreate,
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
-    """Save a new body composition scan for the logged-in user."""
+    """Save a new body composition scan for the logged-in user. Replace if same date exists."""
 
     # Use override height or fall back to user's stored height
     height = data.height_cm or getattr(current_user, "height_cm", None)
 
     bmi = _calc_bmi(data.weight_kg, height) if data.weight_kg else None
 
-    record = BodyMetrics(
-        user_id        = current_user.id,
-        recorded_date  = data.recorded_date or date.today(),
-        weight_kg      = data.weight_kg,
-        bmi            = bmi,
-        body_fat_pct   = data.body_fat_pct,
-        visceral_fat   = data.visceral_fat,
-        muscle_mass_kg = data.muscle_mass_kg,
-        bone_mass_kg   = data.bone_mass_kg,
-        hydration_pct  = data.hydration_pct,
-        protein_pct    = data.protein_pct,
-        bmr_kcal       = data.bmr_kcal,
-        metabolic_age  = data.metabolic_age,
+    recorded_date = data.recorded_date or date.today()
+    
+    # Check if record for same date already exists
+    stmt = select(BodyMetrics).where(
+        and_(
+            BodyMetrics.user_id == current_user.id,
+            BodyMetrics.recorded_date == recorded_date
+        )
     )
-    db.add(record)
+    result = await db.execute(stmt)
+    existing_record = result.scalar_one_or_none()
+    
+    if existing_record:
+        # Update existing record
+        existing_record.weight_kg = data.weight_kg
+        existing_record.bmi = bmi
+        existing_record.body_fat_pct = data.body_fat_pct
+        existing_record.visceral_fat = data.visceral_fat
+        existing_record.muscle_mass_kg = data.muscle_mass_kg
+        existing_record.bone_mass_kg = data.bone_mass_kg
+        existing_record.hydration_pct = data.hydration_pct
+        existing_record.protein_pct = data.protein_pct
+        existing_record.bmr_kcal = data.bmr_kcal
+        existing_record.metabolic_age = data.metabolic_age
+        record = existing_record
+    else:
+        # Create new record
+        record = BodyMetrics(
+            user_id        = current_user.id,
+            recorded_date  = recorded_date,
+            weight_kg      = data.weight_kg,
+            bmi            = bmi,
+            body_fat_pct   = data.body_fat_pct,
+            visceral_fat   = data.visceral_fat,
+            muscle_mass_kg = data.muscle_mass_kg,
+            bone_mass_kg   = data.bone_mass_kg,
+            hydration_pct  = data.hydration_pct,
+            protein_pct    = data.protein_pct,
+            bmr_kcal       = data.bmr_kcal,
+            metabolic_age  = data.metabolic_age,
+        )
+        db.add(record)
+    
     await db.commit()
     await db.refresh(record)
     return record

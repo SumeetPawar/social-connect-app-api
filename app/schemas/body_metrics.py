@@ -1,6 +1,7 @@
 from datetime import date
 from typing import Optional
-from pydantic import BaseModel
+from pydantic import BaseModel, field_validator
+from uuid import UUID
 
 
 class BodyMetricCreate(BaseModel):
@@ -18,22 +19,29 @@ class BodyMetricCreate(BaseModel):
 
 
 class BodyMetricOut(BaseModel):
-    id:             int
-    user_id:        int
-    recorded_date:  date
-    weight_kg:      Optional[float]
-    bmi:            Optional[float]
-    body_fat_pct:   Optional[float]
-    visceral_fat:   Optional[float]
+    id: str
+    user_id: str
+    recorded_date: date
+    weight_kg: Optional[float]
+    bmi: Optional[float]
+    body_fat_pct: Optional[float]
+    visceral_fat: Optional[float]
     muscle_mass_kg: Optional[float]
-    bone_mass_kg:   Optional[float]
-    hydration_pct:  Optional[float]
-    protein_pct:    Optional[float]
-    bmr_kcal:       Optional[int]
-    metabolic_age:  Optional[int]
+    bone_mass_kg: Optional[float]
+    hydration_pct: Optional[float]
+    protein_pct: Optional[float]
+    bmr_kcal: Optional[int]
+    metabolic_age: Optional[int]
 
     class Config:
         from_attributes = True
+
+    @field_validator('id', 'user_id', mode='before')
+    @classmethod
+    def convert_uuid_to_str(cls, v):
+        if isinstance(v, UUID):
+            return str(v)
+        return v
 
 class HistoryResponse(BaseModel):
     """All periods in one response — frontend picks what it needs."""

@@ -129,7 +129,7 @@ class JoinChallengeRequest(BaseModel):
     @field_validator('selected_daily_target')
     @classmethod
     def validate_target(cls, v):
-        if v is not None and v not in [3000, 5000, 7500, 10000]:
+        if v is not None and v not in [3000, 5000, 7500, 8000, 9000, 10000]:
             raise ValueError('Daily target must be 3000, 5000, 7500, or 10000')
         return v
 

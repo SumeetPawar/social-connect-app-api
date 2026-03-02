@@ -16,19 +16,35 @@ import os
 #   python scripts/db_admin_tools.py delete_all_challenges
 # Add a challenge:
 #   python scripts/db_admin_tools.py add_challenge "Title" month department 2026-02-01 2026-02-28 active "Description here"
+# Add a challenge for a department:
+#   python scripts/db_admin_tools.py add_challenge_for_dept "Title" month department 2026-02-01 2026-02-28 active "Description here" <department_id>
 # List all challenges:
 #   python scripts/db_admin_tools.py list_challenges
 # List all goals for a user:
 #   python scripts/db_admin_tools.py list_goals <user_id>
 # Add a goal for a user:
 #   python scripts/db_admin_tools.py add_goal <user_id> <metric_key> <day> <value_num> <value_bool>   
+# Delete body metrics for user on specific date:
+#   python scripts/db_admin_tools.py delete_body_metrics <user_id> 2026-03-01
+# List all body metrics for a user:
+#   python scripts/db_admin_tools.py list_body_metrics <user_id>
 # Make admin                    
 # python scripts/db_admin_tools.py set-admin 550e8400-e29b-41d4-a716-...  
 # Show admins
 # python scripts/db_admin_tools.py list-admins                            
+# List all departments:
+#   python scripts/db_admin_tools.py list_departments
+async def list_departments():
+    """List all departments."""
+    conn = await asyncpg.connect(DB_URL)
+    rows = await conn.fetch('SELECT id, name FROM departments ORDER BY name')
+    print(f"Departments ({len(rows)}):")
+    for row in rows:
+        print(f"{row['id']} | {row['name']}")
+    await conn.close()
 
-# DB_URL = os.environ.get('DATABASE_URL', 'postgresql://fitness:fitnesspass@localhost:5432/fitnessdb')
-DB_URL = 'postgresql://gesadmin:Markmywords%4089@ges-social-pg-prod.postgres.database.azure.com/fitness_tracker'
+DB_URL = os.environ.get('DATABASE_URL', 'postgresql://fitness:fitnesspass@localhost:5432/fitnessdb')
+# DB_URL = 'postgresql://gesadmin:Markmywords%4089@ges-social-pg-prod.postgres.database.azure.com/fitness_tracker'
 
 async def list_users():
     conn = await asyncpg.connect(DB_URL)
@@ -62,6 +78,39 @@ async def delete_all_challenges():
     print(f"Deleted all challenges: {result}")
     await conn.close()
 
+async def delete_body_metrics(user_id, date_str):
+    """Delete body metrics for a user on a specific date."""
+    import datetime
+    conn = await asyncpg.connect(DB_URL)
+    try:
+        recorded_date = datetime.datetime.strptime(date_str, "%Y-%m-%d").date()
+        result = await conn.execute(
+            'DELETE FROM body_metrics WHERE user_id = $1 AND recorded_date = $2',
+            user_id, recorded_date
+        )
+        print(f"Deleted body metrics for user {user_id} on {recorded_date}: {result}")
+    except ValueError:
+        print(f"❌ Invalid date format. Use YYYY-MM-DD (e.g., 2026-03-01)")
+    finally:
+        await conn.close()
+
+async def list_body_metrics(user_id):
+    """List all body metrics for a specific user."""
+    conn = await asyncpg.connect(DB_URL)
+    rows = await conn.fetch(
+        'SELECT id, recorded_date, weight_kg, bmi, body_fat_pct, visceral_fat, muscle_mass_kg, bone_mass_kg, hydration_pct, protein_pct, bmr_kcal, metabolic_age FROM body_metrics WHERE user_id = $1 ORDER BY recorded_date DESC',
+        user_id
+    )
+    if not rows:
+        print(f'No body metrics found for user {user_id}')
+    else:
+        print(f'Body Metrics for user {user_id}:')
+        print(f"{'Date':<12} {'Weight':<8} {'BMI':<6} {'Fat%':<6} {'Visc.Fat':<9} {'Muscle':<8} {'Bone':<6} {'H2O%':<6} {'Protein%':<8} {'BMR':<6} {'MetAge':<6}")
+        print('-' * 120)
+        for row in rows:
+            print(f"{str(row['recorded_date']):<12} {str(row['weight_kg'] or '-'):<8} {str(row['bmi'] or '-'):<6} {str(row['body_fat_pct'] or '-'):<6} {str(row['visceral_fat'] or '-'):<9} {str(row['muscle_mass_kg'] or '-'):<8} {str(row['bone_mass_kg'] or '-'):<6} {str(row['hydration_pct'] or '-'):<6} {str(row['protein_pct'] or '-'):<8} {str(row['bmr_kcal'] or '-'):<6} {str(row['metabolic_age'] or '-'):<6}")
+    await conn.close()
+
 async def add_challenge(title, period, scope, start_date, end_date, status, description):
     import uuid, datetime
     conn = await asyncpg.connect(DB_URL)
@@ -76,12 +125,39 @@ async def add_challenge(title, period, scope, start_date, end_date, status, desc
     print(f'Inserted challenge with id: {challenge_id}')
     await conn.close()
 
+async def add_challenge_for_dept(title, period, scope, start_date, end_date, status, description, department_id):
+    """Add a challenge and link it to a specific department."""
+    import uuid, datetime
+    conn = await asyncpg.connect(DB_URL)
+    challenge_id = str(uuid.uuid4())
+    # Parse dates
+    start_date = datetime.datetime.strptime(start_date, "%Y-%m-%d").date()
+    end_date = datetime.datetime.strptime(end_date, "%Y-%m-%d").date()
+    await conn.execute(
+        'INSERT INTO challenges (id, title, period, scope, start_date, end_date, status, description) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)',
+        challenge_id, title, period, scope, start_date, end_date, status, description
+    )
+    await conn.execute(
+        'INSERT INTO challenge_departments (challenge_id, department_id) VALUES ($1, $2)',
+        challenge_id, department_id
+    )
+    print(f'Inserted challenge with id: {challenge_id} for department {department_id}')
+    await conn.close()
+
 async def list_challenges():
     conn = await asyncpg.connect(DB_URL)
     rows = await conn.fetch('SELECT id, title, period, scope, start_date, end_date, status FROM challenges ORDER BY start_date DESC')
     print('Challenges:')
+    print(f"{'ID':<37} {'Title':<20} {'Period':<7} {'Scope':<12} {'Start Date':<12} {'End Date':<12} {'Status':<10} {'Departments':<35}")
+    print('-' * 155)
     for row in rows:
-        print(f"{row['id']} | {row['title']} | {row['period']} | {row['scope']} | {row['start_date']} | {row['end_date']} | {row['status']}")
+        # Get departments for this challenge
+        dept_rows = await conn.fetch(
+            'SELECT d.name FROM departments d JOIN challenge_departments cd ON d.id = cd.department_id WHERE cd.challenge_id = $1 ORDER BY d.name',
+            row['id']
+        )
+        dept_names = ', '.join([d['name'] for d in dept_rows]) if dept_rows else '(company-wide)'
+        print(f"{str(row['id']):<37} {str(row['title']):<20} {str(row['period']):<7} {str(row['scope']):<12} {str(row['start_date']):<12} {str(row['end_date']):<12} {str(row['status']):<10} {dept_names:<35}")
     await conn.close()
 
 async def list_goals(user_id):
@@ -179,12 +255,16 @@ if __name__ == '__main__':
         print("  python db_admin_tools.py delete_challenge <challenge_id>")
         print("  python db_admin_tools.py delete_all_challenges")
         print("  python db_admin_tools.py add_challenge <title> <period> <scope> <start_date> <end_date> <status> <description>")
+        print("  python db_admin_tools.py add_challenge_for_dept <title> <period> <scope> <start_date> <end_date> <status> <description> <department_id>")
         print("  python db_admin_tools.py list_challenges")
         print("  python db_admin_tools.py list_goals <user_id>")
         print("  python db_admin_tools.py add_goal <user_id> <metric_key> <day> <value_num> <value_bool>")
+        print("  python db_admin_tools.py delete_body_metrics <user_id> <date>")
+        print("  python db_admin_tools.py list_body_metrics <user_id>")
         print("  python db_admin_tools.py set-admin <id>    - Make user admin")
         print("  python db_admin_tools.py remove-admin <id> - Remove admin role")
         print("  python db_admin_tools.py list-admins       - List all admins")
+        print("  python db_admin_tools.py list_departments  - List all departments")
         sys.exit(1)
     cmd = sys.argv[1]
     if cmd == 'list_users':
@@ -202,12 +282,19 @@ if __name__ == '__main__':
         asyncio.run(add_challenge(
             sys.argv[2], sys.argv[3], sys.argv[4], sys.argv[5], sys.argv[6], sys.argv[7], sys.argv[8]
         ))
+    elif cmd == 'add_challenge_for_dept' and len(sys.argv) == 10:
+        # Usage: add_challenge_for_dept <title> <period> <scope> <start_date> <end_date> <status> <description> <department_id>
+        asyncio.run(add_challenge_for_dept(
+            sys.argv[2], sys.argv[3], sys.argv[4], sys.argv[5], sys.argv[6], sys.argv[7], sys.argv[8], sys.argv[9]
+        ))
     elif cmd == 'list_challenges':
         asyncio.run(list_challenges())
     elif cmd == 'list_goals' and len(sys.argv) == 3:
         asyncio.run(list_goals(sys.argv[2]))
     elif cmd == 'add_goal' and len(sys.argv) == 7:
         asyncio.run(add_goal(sys.argv[2], sys.argv[3], sys.argv[4], sys.argv[5], sys.argv[6]))
+    elif cmd == 'delete_body_metrics' and len(sys.argv) == 4:
+        asyncio.run(delete_body_metrics(sys.argv[2], sys.argv[3]))
     elif cmd == "set-admin":
         if len(sys.argv) < 3:
             print("❌ Please provide user ID")
@@ -220,6 +307,8 @@ if __name__ == '__main__':
         asyncio.run(remove_admin(sys.argv[2]))
     elif cmd == "list-admins":
         asyncio.run(list_admins())
+    elif cmd == 'list_departments':
+        asyncio.run(list_departments())
     else:
         print("Invalid command or missing argument.")
 

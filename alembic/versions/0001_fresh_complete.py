@@ -282,7 +282,7 @@ def upgrade():
         sa.Column('challenge_perfect_days', sa.Integer(), nullable=False, server_default=sa.text("0")),
         sa.Column('challenge_total_score', sa.Integer(), nullable=False, server_default=sa.text("0")),
         sa.Column('last_activity_date', sa.Date(), nullable=True),
-        sa.CheckConstraint('(selected_daily_target IS NULL) OR (selected_daily_target IN (3000,5000,7500,10000))', name='chk_challenge_participants_daily_target_allowed'),
+        sa.CheckConstraint('(selected_daily_target IS NULL) OR (selected_daily_target IN (3000,5000,7500,8000,9000,10000))', name='chk_challenge_participants_daily_target_allowed'),
         sa.ForeignKeyConstraint(['challenge_id'], ['challenges.id'], ondelete='CASCADE'),
         sa.ForeignKeyConstraint(['user_id'], ['users.id'], ondelete='CASCADE'),
         sa.ForeignKeyConstraint(['team_id'], ['teams.id'], ondelete='SET NULL'),

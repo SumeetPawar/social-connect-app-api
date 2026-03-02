@@ -35,33 +35,22 @@ async def get_available_challenges(
     Shows active challenges that the user can join.
     """
     today = date.today()
-    
-    # Subquery: Challenges in user's department
+    # Only keep department/company-wide condition
     dept_subquery = select(ChallengeDepartment.challenge_id).where(
         ChallengeDepartment.department_id == current_user.department_id
     )
-    
-    # Subquery: Company-wide challenges (no departments linked)
     company_wide_subquery = (
         select(Challenge.id)
         .outerjoin(ChallengeDepartment, Challenge.id == ChallengeDepartment.challenge_id)
         .where(ChallengeDepartment.id.is_(None))
     )
-    
-    # Main query
     stmt = select(Challenge).where(
-        and_(
-        Challenge.status == 'active',
-            and_(
-                Challenge.end_date >= today,
-                or_(
-                    Challenge.id.in_(dept_subquery),
-                    Challenge.id.in_(company_wide_subquery)
-                )
-          )
+        or_(
+            Challenge.id.in_(dept_subquery),
+            Challenge.id.in_(company_wide_subquery)
         )
     ).order_by(Challenge.start_date)
-    
+
     result = await db.execute(stmt)
     challenges = result.scalars().all()
     
@@ -268,6 +257,24 @@ async def get_my_challenge_week_progress(
         }
     )
     steps_data = result.mappings().all()
+
+    # Get total steps for the entire challenge period
+    total_steps_query = text("""
+        SELECT SUM(steps) as total_steps
+        FROM daily_steps
+        WHERE user_id = :user_id
+        AND day >= :challenge_start
+        AND day <= :challenge_end
+    """)
+    total_steps_result = await db.execute(
+        total_steps_query,
+        {
+            "user_id": current_user.id,
+            "challenge_start": challenge_start,
+            "challenge_end": challenge_end
+        }
+    )
+    total_challenge_steps = total_steps_result.scalar() or 0
     
     # Build 7-day array (Mon-Sun)
     days_array = []
@@ -306,6 +313,10 @@ async def get_my_challenge_week_progress(
     }
     # ========================================================================
     
+    # Calculate total target for full challenge
+    total_challenge_days = (challenge_end - challenge_start).days + 1 if challenge_end >= challenge_start else 0
+    total_challenge_target = daily_target * total_challenge_days
+
     return {
         "challenge_id": str(challenge['id']),
         "challenge_title": challenge['title'],
@@ -317,6 +328,8 @@ async def get_my_challenge_week_progress(
         "valid_days_in_week": valid_days_count,
         "goal_daily_target": daily_target,
         "goal_period_target": daily_target * valid_days_count,
+        "total_challenge_target": total_challenge_target,
+            "total_challenge_steps": total_challenge_steps,
         "week_total_steps": week_total,
         "days": days_array,
         "streak": streak
@@ -412,7 +425,7 @@ async def get_challenge_leaderboard(
                         ROUND((days_met_goal::numeric / :total_days) * 100, 1)
                     ELSE 0 
                 END as completion_pct,
-                RANK() OVER (ORDER BY total_steps DESC) as rank
+                RANK() OVER (ORDER BY total_steps DESC, name ASC) as rank
             FROM user_totals
         )
         SELECT 
@@ -430,7 +443,7 @@ async def get_challenge_leaderboard(
             days_logged,
             completion_pct
         FROM ranked
-        ORDER BY rank
+        ORDER BY rank, name ASC
         LIMIT 100
     """)
     
@@ -492,8 +505,8 @@ async def get_challenge_leaderboard(
             "days_met_goal": user['days_met_goal'],
             "days_logged": user['days_logged'],
             "completion_pct": float(user['completion_pct']),
-            "previous_rank": user.get('previous_rank'),
-            "previous_consistency_rank": user.get('previous_consistency_rank'),
+            "previous_rank": user.get('previous_rank') if user['total_steps'] > 0 else None,
+            "previous_consistency_rank": user.get('previous_consistency_rank') if user['total_steps'] > 0 else None,
             "is_me": str(user['user_id']) == str(current_user.id),
             "is_top": user['rank'] == 1
         })
@@ -595,7 +608,7 @@ async def join_challenge(
     Join a challenge.
     
     - **team_id**: Team ID (required for team challenges)
-    - **selected_daily_target**: Personal daily target for steps (3000/5000/7500/10000)
+    - **selected_daily_target**: Personal daily target for steps (3000/5000/7500/8000/9000/10000)
     """
     return await ChallengesService.join_challenge(
         db,
