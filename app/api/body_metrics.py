@@ -37,7 +37,6 @@ async def save_scan(
 
     # Use override height or fall back to user's stored height
     height = data.height_cm or getattr(current_user, "height_cm", None)
-
     bmi = _calc_bmi(data.weight_kg, height) if data.weight_kg else None
 
     recorded_date = data.recorded_date or date.today()
@@ -86,7 +85,6 @@ async def save_scan(
     await db.commit()
     await db.refresh(record)
     return record
-
 
 @router.get("/latest", response_model=BodyMetricOut)
 async def get_latest(
