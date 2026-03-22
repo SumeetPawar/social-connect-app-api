@@ -10,20 +10,50 @@ from app.schemas.profile import ProfileOut, ProfileUpdate
 
 router = APIRouter(prefix="/api/me", tags=["me"])
 
-@router.get("")
+
+class MeOut(BaseModel):
+    """Single comprehensive response — frontend calls /me ONCE and caches it."""
+    id: str
+    email: str
+    name: Optional[str]
+    role: str
+    # profile / body-composition personalisation fields
+    age: Optional[int]
+    gender: Optional[str]
+    activity_level: Optional[str]
+    height_cm: Optional[float]
+
+    class Config:
+        from_attributes = True
+
+
+@router.get("", response_model=MeOut)
 async def me(user: User = Depends(get_current_user)):
-    return {"id": str(user.id), "email": user.email, "name": user.name,"role": user.role}
+    """
+    Returns identity + profile data in one call.
+    Frontend: call this ONCE on app load, store result in a global/context/store,
+    and reuse everywhere. Do NOT call /me inside individual components.
+    """
+    return MeOut(
+        id             = str(user.id),
+        email          = user.email,
+        name           = user.name,
+        role           = user.role,
+        age            = user.age,
+        gender         = user.gender,
+        activity_level = user.activity_level,
+        height_cm      = float(user.height_cm) if user.height_cm is not None else None,
+    )
 
 
-
-# ─── Add these two routes to your existing users router ──────────────────────
+# ─── /profile kept for backwards compat ──────────────────────────────────────
 
 @router.get("/profile", response_model=ProfileOut)
 async def get_profile(
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
-    """Return profile fields used for body composition range personalisation."""
+    """Subset of /me — prefer using GET /me instead."""
     return ProfileOut(
         age            = current_user.age,
         gender         = current_user.gender,

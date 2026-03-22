@@ -174,6 +174,7 @@ class BodyMetrics(Base):
     weight_kg: Mapped[float | None] = mapped_column(Numeric(5, 2), nullable=True)
     height_cm: Mapped[float | None] = mapped_column(Numeric(5, 2), nullable=True)
     body_fat_pct: Mapped[float | None] = mapped_column(Numeric(4, 2), nullable=True)
+    subcutaneous_fat_pct: Mapped[float | None] = mapped_column(Numeric(4, 2), nullable=True)
     muscle_mass_kg: Mapped[float | None] = mapped_column(Numeric(5, 2), nullable=True)
     bmi: Mapped[float | None] = mapped_column(Numeric(4, 2), nullable=True)
     notes: Mapped[str | None] = mapped_column(Text, nullable=True)
@@ -185,6 +186,7 @@ class BodyMetrics(Base):
     protein_pct: Mapped[float | None] = mapped_column(Numeric(5, 1), nullable=True)
     bmr_kcal: Mapped[int | None] = mapped_column(Integer, nullable=True)
     metabolic_age: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    skeletal_muscle_pct: Mapped[float | None] = mapped_column(Numeric(5, 2), nullable=True)
 
 # ==========================================
 # 4. CHALLENGES

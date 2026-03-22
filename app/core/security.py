@@ -1,26 +1,23 @@
 import hashlib
 import secrets
+import bcrypt
 from datetime import datetime, timedelta, timezone
 from fastapi import HTTPException, status
-from passlib.context import CryptContext
 from jose import JWTError, jwt
 
 from app.core.config import settings
 
-pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
-
 
 def hash_password(password: str) -> str:
     # bcrypt only supports passwords up to 72 bytes
-    # Truncate password to 72 bytes for bcrypt
     password_bytes = password.encode('utf-8')[:72]
-    return pwd_context.hash(password_bytes)
+    return bcrypt.hashpw(password_bytes, bcrypt.gensalt()).decode('utf-8')
 
 
 def verify_password(password: str, password_hash: str) -> bool:
-    # Truncate password to 72 bytes for bcrypt, matching hash_password
+    # Truncate to 72 bytes, matching hash_password
     password_bytes = password.encode('utf-8')[:72]
-    return pwd_context.verify(password_bytes, password_hash)
+    return bcrypt.checkpw(password_bytes, password_hash.encode('utf-8'))
 
 
 def create_access_token(user_id: str) -> str:

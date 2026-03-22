@@ -56,6 +56,7 @@ async def save_scan(
         existing_record.weight_kg = data.weight_kg
         existing_record.bmi = bmi
         existing_record.body_fat_pct = data.body_fat_pct
+        existing_record.subcutaneous_fat_pct = data.subcutaneous_fat_pct
         existing_record.visceral_fat = data.visceral_fat
         existing_record.muscle_mass_kg = data.muscle_mass_kg
         existing_record.bone_mass_kg = data.bone_mass_kg
@@ -63,6 +64,7 @@ async def save_scan(
         existing_record.protein_pct = data.protein_pct
         existing_record.bmr_kcal = data.bmr_kcal
         existing_record.metabolic_age = data.metabolic_age
+        existing_record.skeletal_muscle_pct = data.skeletal_muscle_pct
         record = existing_record
     else:
         # Create new record
@@ -72,6 +74,7 @@ async def save_scan(
             weight_kg      = data.weight_kg,
             bmi            = bmi,
             body_fat_pct   = data.body_fat_pct,
+            subcutaneous_fat_pct = data.subcutaneous_fat_pct,
             visceral_fat   = data.visceral_fat,
             muscle_mass_kg = data.muscle_mass_kg,
             bone_mass_kg   = data.bone_mass_kg,
@@ -79,6 +82,7 @@ async def save_scan(
             protein_pct    = data.protein_pct,
             bmr_kcal       = data.bmr_kcal,
             metabolic_age  = data.metabolic_age,
+            skeletal_muscle_pct = data.skeletal_muscle_pct
         )
         db.add(record)
     

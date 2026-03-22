@@ -2,7 +2,12 @@ from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.triggers.cron import CronTrigger
 from sqlalchemy.ext.asyncio import AsyncSession
 from app.db.session import AsyncSessionLocal
-from app.services.reminder_service import send_step_reminders
+from app.services.reminder_service import (
+    send_step_reminders,
+    send_streak_at_risk,
+    send_rank_change_notifications,
+    send_weekly_summary,
+)
 import logging
 
 
@@ -161,22 +166,73 @@ async def check_and_send_reminders():
             logger.error(f"Error in reminder job: {e}", exc_info=True)
 
 
+async def check_streak_at_risk():
+    async with AsyncSessionLocal() as db:
+        try:
+            await send_streak_at_risk(db)
+        except Exception as e:
+            logger.error(f"Error in streak-at-risk job: {e}", exc_info=True)
 
-# Configure the jobs when module loads (but don't start scheduler yet)
-logger.info("Configuring previous_rank update job")
+
+async def notify_rank_changes():
+    async with AsyncSessionLocal() as db:
+        try:
+            await send_rank_change_notifications(db)
+        except Exception as e:
+            logger.error(f"Error in rank-change notify job: {e}", exc_info=True)
+
+
+async def send_weekly():
+    async with AsyncSessionLocal() as db:
+        try:
+            await send_weekly_summary(db)
+        except Exception as e:
+            logger.error(f"Error in weekly summary job: {e}", exc_info=True)
+
+
+# ─── Configure all jobs ───────────────────────────────────────────────────────
+
+# 1. Daily rank snapshot — 00:05
 scheduler.add_job(
     update_all_previous_ranks,
-    CronTrigger(hour=0, minute=5),  # Runs once daily at 00:05 (after midnight, data settled)
+    CronTrigger(hour=0, minute=5),
     id='update_previous_ranks',
-    replace_existing=True
+    replace_existing=True,
 )
-logger.info("previous_rank snapshot job configured - will run daily at 00:05")
+logger.info("Job configured: rank snapshot @ 00:05 daily")
 
-logger.info("Configuring step reminder job")
+# 2. Rank change push — 00:20 (after snapshot settles)
+scheduler.add_job(
+    notify_rank_changes,
+    CronTrigger(hour=0, minute=20),
+    id='rank_change_notifications',
+    replace_existing=True,
+)
+logger.info("Job configured: rank change notifications @ 00:20 daily")
+
+# 3. Streak-at-risk alert — 20:00 (8 PM)
+scheduler.add_job(
+    check_streak_at_risk,
+    CronTrigger(hour=20, minute=0),
+    id='streak_at_risk',
+    replace_existing=True,
+)
+logger.info("Job configured: streak-at-risk alert @ 20:00 daily")
+
+# 4. Evening step reminder — 21:00 (9 PM)
 scheduler.add_job(
     check_and_send_reminders,
-    CronTrigger(hour=21, minute=0),  # Every day at 9 PM
+    CronTrigger(hour=21, minute=0),
     id='step_reminders',
-    replace_existing=True
+    replace_existing=True,
 )
-logger.info("Step reminder job configured - will run every day at 9 PM")
+logger.info("Job configured: step reminder @ 21:00 daily")
+
+# 5. Weekly summary — every Sunday at 20:00
+scheduler.add_job(
+    send_weekly,
+    CronTrigger(day_of_week='sun', hour=20, minute=0),
+    id='weekly_summary',
+    replace_existing=True,
+)
+logger.info("Job configured: weekly summary @ Sunday 20:00")

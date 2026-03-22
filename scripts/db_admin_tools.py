@@ -3,6 +3,9 @@ import asyncpg
 import sys
 import os
 
+# Ensure the project root is on sys.path so 'app' can be imported
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
 # Usage examples:
 # List all users:
 #   python scripts/db_admin_tools.py list_users
@@ -34,6 +37,45 @@ import os
 # python scripts/db_admin_tools.py list-admins                            
 # List all departments:
 #   python scripts/db_admin_tools.py list_departments
+# List all push subscriptions and show which user they are linked to
+# List all push subscriptions:
+#   python scripts/db_admin_tools.py list_push_subscriptions
+# Delete a push subscription by id:
+#   python scripts/db_admin_tools.py delete_push_subscription <subscription_id>
+# Delete all push subscriptions:
+#   python scripts/db_admin_tools.py delete_all_push_subscriptions
+# Send a test push notification to a specific user by user_id:
+#   python scripts/db_admin_tools.py push_to_user <user_id>
+
+async def list_push_subscriptions():
+    """
+    List all push subscriptions in the DB, showing user_id, endpoint, and creation time.
+    If user_id is null or missing, the subscription is not linked to any user.
+    """
+    conn = await asyncpg.connect(DB_URL)
+    rows = await conn.fetch('SELECT id, user_id, endpoint, created_at FROM push_subscriptions ORDER BY created_at DESC')
+    for row in rows:
+        print(f"id={row['id']}  user_id={row['user_id']}  endpoint={row['endpoint'][:60]}...  created_at={row['created_at']}")
+    await conn.close()
+
+async def delete_push_subscription(subscription_id):
+    """
+    Delete a push subscription by its id.
+    """
+    conn = await asyncpg.connect(DB_URL)
+    result = await conn.execute('DELETE FROM push_subscriptions WHERE id = $1', subscription_id)
+    print(f"Deleted push subscription {subscription_id}: {result}")
+    await conn.close()
+
+async def delete_all_push_subscriptions():
+    """
+    Delete all push subscriptions from the DB.
+    """
+    conn = await asyncpg.connect(DB_URL)
+    result = await conn.execute('DELETE FROM push_subscriptions')
+    print(f"Deleted all push subscriptions: {result}")
+    await conn.close()
+
 async def list_departments():
     """List all departments."""
     conn = await asyncpg.connect(DB_URL)
@@ -43,8 +85,8 @@ async def list_departments():
         print(f"{row['id']} | {row['name']}")
     await conn.close()
 
-DB_URL = os.environ.get('DATABASE_URL', 'postgresql://fitness:fitnesspass@localhost:5432/fitnessdb')
-# DB_URL = 'postgresql://gesadmin:Markmywords%4089@ges-social-pg-prod.postgres.database.azure.com/fitness_tracker'
+# DB_URL = os.environ.get('DATABASE_URL', 'postgresql://fitness:fitnesspass@localhost:5432/fitnessdb')
+DB_URL = 'postgresql://gesadmin:Markmywords%4089@ges-social-pg-prod.postgres.database.azure.com/fitness_tracker'
 
 async def list_users():
     conn = await asyncpg.connect(DB_URL)
@@ -246,6 +288,30 @@ async def list_admins():
     await conn.close()
 
 
+async def push_to_user(user_id):
+    """
+    Send a test push notification to all push subscriptions for the given user_id.
+    """
+    from app.services.push_notify import send_web_push
+    import json
+    conn = await asyncpg.connect(DB_URL)
+    rows = await conn.fetch('SELECT endpoint, p256dh, auth FROM push_subscriptions WHERE user_id = $1', user_id)
+    if not rows:
+        print(f"No push subscriptions found for user {user_id}")
+        await conn.close()
+        return
+    payload = {
+        "title": "🔔 Test Push",
+        "body": f"Hello user {user_id}! This is a test notification.",
+    }
+    for row in rows:
+        sub = {"endpoint": row["endpoint"], "keys": {"p256dh": row["p256dh"], "auth": row["auth"]}}
+        print(f"Sending push to {row['endpoint'][:60]}...")
+        result = send_web_push(sub, payload)
+        print(f"Result: {result}")
+    await conn.close()
+
+
 if __name__ == '__main__':
     if len(sys.argv) < 2:
         print("Usage:")
@@ -265,6 +331,7 @@ if __name__ == '__main__':
         print("  python db_admin_tools.py remove-admin <id> - Remove admin role")
         print("  python db_admin_tools.py list-admins       - List all admins")
         print("  python db_admin_tools.py list_departments  - List all departments")
+        print("  python db_admin_tools.py push_to_user <user_id> - Send test push to user")
         sys.exit(1)
     cmd = sys.argv[1]
     if cmd == 'list_users':
@@ -309,6 +376,14 @@ if __name__ == '__main__':
         asyncio.run(list_admins())
     elif cmd == 'list_departments':
         asyncio.run(list_departments())
+    elif cmd == 'list_push_subscriptions':
+        asyncio.run(list_push_subscriptions())
+    elif cmd == 'delete_push_subscription' and len(sys.argv) == 3:
+        asyncio.run(delete_push_subscription(sys.argv[2]))
+    elif cmd == 'delete_all_push_subscriptions':
+        asyncio.run(delete_all_push_subscriptions())
+    elif cmd == 'push_to_user' and len(sys.argv) == 3:
+        asyncio.run(push_to_user(sys.argv[2]))
     else:
         print("Invalid command or missing argument.")
 

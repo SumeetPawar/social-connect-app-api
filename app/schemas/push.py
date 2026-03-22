@@ -9,4 +9,4 @@ class PushSubscriptionRequest(BaseModel):
 class PushNotificationRequest(BaseModel):
     title: str
     body: str
-    user_id: int | None = None  # If None, send to current user
+    user_id: str | None = None  # If None, send to current user; pass UUID string to target another

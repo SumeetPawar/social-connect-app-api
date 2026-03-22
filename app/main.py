@@ -43,7 +43,7 @@ async def lifespan(app: FastAPI):
             logger.info("Starting scheduler...")
             # Start scheduler directly - it will use the current event loop
             if not scheduler.running:
-                scheduler.start()
+                # scheduler.start()
                 logger.info("Scheduler started successfully")
             # Run rank snapshot immediately on startup (non-blocking)
             from app.services.scheduler import update_all_previous_ranks
