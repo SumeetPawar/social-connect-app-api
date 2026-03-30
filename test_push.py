@@ -5,12 +5,11 @@ Usage:
     python test_push.py raw          # send to first valid (non-legacy) subscription in DB
     python test_push.py list         # list all push subscriptions in DB
     python test_push.py clean        # DELETE all legacy FCM subscriptions from DB
-    python test_push.py reminder     # run evening step reminder job
-    python test_push.py streak       # run streak-at-risk job
-    python test_push.py rank         # run rank change job
-    python test_push.py weekly       # run weekly summary job
+    python test_push.py reminder     # run evening step reminder job (9 PM: 0-steps users)
+    python test_push.py streak       # run streak-at-risk job (8 PM: streak holders)
+    python test_push.py nudge        # run challenge step nudge job (noon/4 PM segments)
     python test_push.py all          # run all jobs
-         <user_id>  # send test push to all subscriptions for a user
+    python test_push.py push_to_user <user_id>  # send test push to all subscriptions for a user
 """
 
 import sys
@@ -20,8 +19,7 @@ from app.db.session import AsyncSessionLocal
 from app.services.reminder_service import (
     send_step_reminders,
     send_streak_at_risk,
-    send_rank_change_notifications,
-    send_weekly_summary,
+    send_challenge_step_nudges,
 )
 
 
@@ -71,14 +69,7 @@ async def list_subs():
             return
         for sub in subs:
             legacy = "⚠️  LEGACY" if "fcm.googleapis.com/fcm/send/" in sub.endpoint else "✅ OK"
-            # Show full user_id
-            user_id_str = str(sub.user_id)
-            # Truncate endpoint: if Google FCM, show only domain, else first 70 chars
-            if "fcm.googleapis.com/fcm/send/" in sub.endpoint:
-                endpoint_str = "fcm.googleapis.com/fcm/send/..."
-            else:
-                endpoint_str = sub.endpoint[:70] + ("..." if len(sub.endpoint) > 70 else "")
-            print(f"{legacy}  user={user_id_str}  endpoint={endpoint_str}")
+            print(f"{legacy}  user={str(sub.user_id)[:8]}...  endpoint={sub.endpoint[:70]}...")
 
 async def clean_legacy():
     from sqlalchemy import select, delete
@@ -109,8 +100,7 @@ async def run_job(name: str):
     jobs = {
         "reminder": ("Evening step reminder", send_step_reminders),
         "streak":   ("Streak-at-risk alert", send_streak_at_risk),
-        "rank":     ("Rank change notifications", send_rank_change_notifications),
-        "weekly":   ("Weekly summary", send_weekly_summary),
+        "nudge":    ("Challenge step nudges", send_challenge_step_nudges),
     }
     label, fn = jobs[name]
     print(f"Running job: {label}")
@@ -120,7 +110,7 @@ async def run_job(name: str):
 
 
 async def run_all():
-    for key in ["reminder", "streak", "rank", "weekly"]:
+    for key in ["reminder", "streak", "nudge"]:
         await run_job(key)
         print()
 
@@ -164,7 +154,7 @@ if __name__ == "__main__":
         asyncio.run(list_subs())
     elif cmd == "clean":
         asyncio.run(clean_legacy())
-    elif cmd in ("reminder", "streak", "rank", "weekly"):
+    elif cmd in ("reminder", "streak", "nudge"):
         asyncio.run(run_job(cmd))
     elif cmd == "all":
         asyncio.run(run_all())

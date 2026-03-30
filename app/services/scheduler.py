@@ -5,8 +5,9 @@ from app.db.session import AsyncSessionLocal
 from app.services.reminder_service import (
     send_step_reminders,
     send_streak_at_risk,
-    send_rank_change_notifications,
-    send_weekly_summary,
+    send_challenge_step_nudges,
+    send_test_notification_to_user,
+    create_next_monthly_challenge_and_enroll_users,
 )
 import logging
 
@@ -174,43 +175,26 @@ async def check_streak_at_risk():
             logger.error(f"Error in streak-at-risk job: {e}", exc_info=True)
 
 
-async def notify_rank_changes():
+async def nudge_challenge_participants():
     async with AsyncSessionLocal() as db:
         try:
-            await send_rank_change_notifications(db)
+            await send_challenge_step_nudges(db)
         except Exception as e:
-            logger.error(f"Error in rank-change notify job: {e}", exc_info=True)
-
-
-async def send_weekly():
-    async with AsyncSessionLocal() as db:
-        try:
-            await send_weekly_summary(db)
-        except Exception as e:
-            logger.error(f"Error in weekly summary job: {e}", exc_info=True)
+            logger.error(f"Error in challenge step nudge job: {e}", exc_info=True)
 
 
 # ─── Configure all jobs ───────────────────────────────────────────────────────
 
-# 1. Daily rank snapshot — 00:05
-scheduler.add_job(
-    update_all_previous_ranks,
-    CronTrigger(hour=0, minute=5),
-    id='update_previous_ranks',
-    replace_existing=True,
-)
-logger.info("Job configured: rank snapshot @ 00:05 daily")
+# 1. Daily rank snapshot — 00:05 (still needed for leaderboard UI)
+# scheduler.add_job(
+#     update_all_previous_ranks,
+#     CronTrigger(hour=0, minute=5),
+#     id='update_previous_ranks',
+#     replace_existing=True,
+# )
+# logger.info("Job configured: rank snapshot @ 00:05 daily")
 
-# 2. Rank change push — 00:20 (after snapshot settles)
-scheduler.add_job(
-    notify_rank_changes,
-    CronTrigger(hour=0, minute=20),
-    id='rank_change_notifications',
-    replace_existing=True,
-)
-logger.info("Job configured: rank change notifications @ 00:20 daily")
-
-# 3. Streak-at-risk alert — 20:00 (8 PM)
+# 2. Streak-at-risk alert — 20:00 (8 PM)
 scheduler.add_job(
     check_streak_at_risk,
     CronTrigger(hour=20, minute=0),
@@ -219,7 +203,7 @@ scheduler.add_job(
 )
 logger.info("Job configured: streak-at-risk alert @ 20:00 daily")
 
-# 4. Evening step reminder — 21:00 (9 PM)
+# 3. Evening step reminder — 21:00 (9 PM)
 scheduler.add_job(
     check_and_send_reminders,
     CronTrigger(hour=21, minute=0),
@@ -228,11 +212,47 @@ scheduler.add_job(
 )
 logger.info("Job configured: step reminder @ 21:00 daily")
 
-# 5. Weekly summary — every Sunday at 20:00
+# 4. Challenge step nudges — 12:00 (noon) only
+# scheduler.add_job(
+#     nudge_challenge_participants,
+#     CronTrigger(hour=12, minute=0),
+#     id='challenge_nudge_noon',
+#     replace_existing=True,
+# )
+# logger.info("Job configured: challenge nudges @ 12:00 daily")
+
+# ─── TEST JOB: send one sample message every 10 mins to a specific user ───────
+async def _test_notification_job():
+    async with AsyncSessionLocal() as db:
+        try:
+            await send_test_notification_to_user(db)
+        except Exception as e:
+            logger.error(f"Error in test notification job: {e}", exc_info=True)
+
+
+# ─── Monthly Challenge Auto-Creation Job ──────────────────────────────────────
+async def monthly_challenge_job():
+    async with AsyncSessionLocal() as db:
+        try:
+            await create_next_monthly_challenge_and_enroll_users(db)
+        except Exception as e:
+            logger.error(f"Error in monthly challenge creation job: {e}", exc_info=True)
+
+# Run at 23:55 on the last day of each month
+from apscheduler.triggers.cron import CronTrigger
 scheduler.add_job(
-    send_weekly,
-    CronTrigger(day_of_week='sun', hour=20, minute=0),
-    id='weekly_summary',
+    monthly_challenge_job,
+    CronTrigger(hour=23, minute=55, day='last'),
+    id='monthly_challenge_creation',
     replace_existing=True,
 )
-logger.info("Job configured: weekly summary @ Sunday 20:00")
+logger.info("Job configured: monthly challenge creation @ 23:55 last day of month")
+
+scheduler.add_job(
+    _test_notification_job,
+    "interval",
+    minutes=4,
+    id="test_notification",
+    replace_existing=True,
+)
+logger.info("TEST JOB configured: sample notification every 4 mins")

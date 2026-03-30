@@ -43,12 +43,20 @@ async def lifespan(app: FastAPI):
             logger.info("Starting scheduler...")
             # Start scheduler directly - it will use the current event loop
             if not scheduler.running:
-                # scheduler.start()
+                scheduler.start()
                 logger.info("Scheduler started successfully")
             # Run rank snapshot immediately on startup (non-blocking)
             from app.services.scheduler import update_all_previous_ranks
             asyncio.create_task(update_all_previous_ranks())
             logger.info("Triggered initial previous_rank snapshot on startup")
+            # Send service-started notification to test user
+            from app.services.reminder_service import send_service_started_notification
+            from app.db.session import AsyncSessionLocal
+            async def _notify_startup():
+                async with AsyncSessionLocal() as db:
+                    await send_service_started_notification(db)
+            asyncio.create_task(_notify_startup())
+            logger.info("Triggered startup notification to test user")
         except Exception as e:
             logger.error(f"Scheduler startup failed: {e}", exc_info=True)
     
