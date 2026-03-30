@@ -1,7 +1,10 @@
-from sqlalchemy import Boolean, Integer, Text, Date, DateTime, Numeric, ForeignKey
+from datetime import date, datetime
+import enum
+
+from sqlalchemy import Boolean, Integer, String, String, Text, Date, DateTime, Numeric, ForeignKey, Enum as SAEnum, UniqueConstraint
 from sqlalchemy.dialects.postgresql import UUID, JSONB
 from sqlalchemy.sql import func, text
-from sqlalchemy.orm import Mapped, mapped_column
+from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.db.base import Base
 
@@ -434,3 +437,93 @@ class PushSubscription(Base):
     p256dh: Mapped[str] = mapped_column(Text, nullable=False)
     auth: Mapped[str] = mapped_column(Text, nullable=False)
     created_at: Mapped[str] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+
+    # ── Add these to your existing models.py ─────────────────────────────────────
+# Assumes you already have: User, Base, mapped_column, Mapped, relationship etc.
+    # ==========================================
+# 10. Habits, Challenges, and Gamification models
+# ==========================================
+ 
+
+
+class ChallengeStatus(str, enum.Enum):
+    active    = "active"
+    completed = "completed"
+    abandoned = "abandoned"
+
+
+class HabitCategory(str, enum.Enum):
+    Body      = "Body"
+    Mind      = "Mind"
+    Lifestyle = "Lifestyle"
+
+
+class HabitTier(str, enum.Enum):
+    core   = "core"
+    growth = "growth"
+    avoid  = "avoid"
+
+
+class Habit(Base):
+    __tablename__ = "habits"
+
+    id:          Mapped[int]           = mapped_column(Integer, primary_key=True)
+    slug:        Mapped[str]           = mapped_column(String(64), unique=True, nullable=False)
+    label:       Mapped[str]           = mapped_column(String(255), nullable=False)
+    desc:        Mapped[str]           = mapped_column(String(512), nullable=False)
+    why:         Mapped[str]           = mapped_column(Text, nullable=False)
+    impact:      Mapped[str]           = mapped_column(String(64), nullable=False)
+    category:    Mapped[HabitCategory] = mapped_column(SAEnum(HabitCategory), nullable=False)
+    tier:        Mapped[HabitTier]     = mapped_column(SAEnum(HabitTier), nullable=False)
+    has_counter: Mapped[bool]          = mapped_column(Boolean, default=False)
+    unit:        Mapped[str | None]    = mapped_column(String(32), nullable=True)
+    target:      Mapped[int | None]    = mapped_column(Integer, nullable=True)
+
+    commitments: Mapped[list["HabitCommitment"]] = relationship(back_populates="habit")
+
+
+class Challenge(Base):
+    __tablename__ = "challenges"
+
+    id:         Mapped[int]             = mapped_column(Integer, primary_key=True)
+    user_id:    Mapped[int]             = mapped_column(Integer, ForeignKey("users.id", ondelete="CASCADE"))
+    pack_id:    Mapped[str | None]      = mapped_column(String(64), nullable=True)
+    status:     Mapped[ChallengeStatus] = mapped_column(SAEnum(ChallengeStatus), default=ChallengeStatus.active)
+    started_at: Mapped[date]            = mapped_column(Date, nullable=False)
+    ends_at:    Mapped[date]            = mapped_column(Date, nullable=False)
+    created_at: Mapped[datetime]        = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+    user:        Mapped["User"]                  = relationship(back_populates="challenges")
+    commitments: Mapped[list["HabitCommitment"]] = relationship(back_populates="challenge", cascade="all, delete-orphan")
+
+
+class HabitCommitment(Base):
+    __tablename__ = "habit_commitments"
+    __table_args__ = (UniqueConstraint("challenge_id", "habit_id"),)
+
+    id:           Mapped[int] = mapped_column(Integer, primary_key=True)
+    challenge_id: Mapped[int] = mapped_column(Integer, ForeignKey("challenges.id", ondelete="CASCADE"))
+    habit_id:     Mapped[int] = mapped_column(Integer, ForeignKey("habits.id"))
+    sort_order:   Mapped[int] = mapped_column(Integer, default=0)
+
+    challenge: Mapped["Challenge"]      = relationship(back_populates="commitments")
+    habit:     Mapped["Habit"]          = relationship(back_populates="commitments")
+    logs:      Mapped[list["DailyLog"]] = relationship(back_populates="commitment", cascade="all, delete-orphan")
+
+
+class DailyLog(Base):
+    __tablename__ = "daily_logs"
+    __table_args__ = (UniqueConstraint("commitment_id", "logged_date"),)
+
+    id:            Mapped[int]        = mapped_column(Integer, primary_key=True)
+    commitment_id: Mapped[int]        = mapped_column(Integer, ForeignKey("habit_commitments.id", ondelete="CASCADE"))
+    logged_date:   Mapped[date]       = mapped_column(Date, nullable=False)
+    completed:     Mapped[bool]       = mapped_column(Boolean, default=False)
+    value:         Mapped[int | None] = mapped_column(Integer, nullable=True)
+    logged_at:     Mapped[datetime]   = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+    commitment: Mapped["HabitCommitment"] = relationship(back_populates="logs")
+
+
+# Also add to your User model:
+# challenges: Mapped[list["Challenge"]] = relationship(back_populates="user")
