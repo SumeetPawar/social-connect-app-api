@@ -35,7 +35,8 @@ def sha256(s: str) -> str:
 async def signup(payload: SignupIn, db: AsyncSession = Depends(get_db)):
     # Restrict signup to allowed emails
     email_lc = str(payload.email).lower()
-    if email_lc not in [e.lower() for e in ALLOWED_SIGNUP_EMAILS]:
+    dept_name = ALLOWED_SIGNUP_EMAILS.get(email_lc)
+    if dept_name is None:
         raise HTTPException(status_code=403, detail="Signup not allowed for this email")
 
     # Check if user exists
@@ -44,13 +45,11 @@ async def signup(payload: SignupIn, db: AsyncSession = Depends(get_db)):
     if existing:
         raise HTTPException(status_code=400, detail="Email already registered")
 
-    # Get or create default department
-    dept_q = await db.execute(select(Department).where(Department.name == "GESBMS"))
+    # Get or create department by name (auto-creates if not in DB yet)
+    dept_q = await db.execute(select(Department).where(Department.name == dept_name))
     department = dept_q.scalar_one_or_none()
-
     if not department:
-        # Create default department if it doesn't exist
-        department = Department(name="GESBMS")
+        department = Department(name=dept_name)
         db.add(department)
         await db.flush()  # Get department.id
 

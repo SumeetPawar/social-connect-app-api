@@ -3,14 +3,13 @@ from datetime import date, datetime
 from typing import Optional
 
 from pydantic import BaseModel, field_validator
-from sqlalchemy import Date
 
 
 class HabitOut(BaseModel):
     id: int
     slug: str
     label: str
-    desc: str
+    description: str
     why: str
     impact: str
     category: str
@@ -53,11 +52,31 @@ class LogCreate(BaseModel):
 class LogOut(BaseModel):
     id: int
     commitment_id: int
-    logged_date: Date
+    logged_date: date
     completed: bool
     value: Optional[int]
     logged_at: datetime
     model_config = {"from_attributes": True}
+
+
+class LogWithStreakOut(BaseModel):
+    # Log fields
+    id: int
+    commitment_id: int
+    logged_date: date
+    completed: bool
+    value: Optional[int]
+    logged_at: datetime
+    # Streak fields
+    challenge_id: int
+    current_streak: int
+    effective_streak: int
+    longest_streak: int
+    perfect_days: int
+    completion_pct: float
+    shields_earned: int
+    shields_used: int
+    shield_used_on_dates: list[date]
  
  
 class HabitTodayOut(BaseModel):
@@ -70,7 +89,7 @@ class HabitTodayOut(BaseModel):
  
 class TodayOut(BaseModel):
     challenge_id: int
-    date: Date
+    date: date
     day_number: int
     habits: list[HabitTodayOut]
     completed_count: int
@@ -83,3 +102,73 @@ class StreakOut(BaseModel):
     longest_streak: int
     perfect_days: int
     completion_pct: float
+    shields_earned: int
+    shields_used: int
+    effective_streak: int  # streak after shield protection
+    shield_used_on_dates: list[date]  # dates where shield was consumed
+
+
+class LeaderboardEntry(BaseModel):
+    rank: int
+    rank_change: int          # positive = moved up, negative = moved down, 0 = same
+    user_id: str
+    name: Optional[str]
+    profile_pic_url: Optional[str]
+    challenge_id: int
+    completion_pct: float
+    completed: int            # habits completed in period
+    possible: int             # total possible (habits × days)
+    streak: int               # current perfect-day streak
+
+
+class LeaderboardOut(BaseModel):
+    period_days: int
+    period_start: date
+    period_end: date
+    entries: list[LeaderboardEntry]
+
+
+class HabitHistoryEntry(BaseModel):
+    commitment_id: int
+    habit: HabitOut
+    days_completed: int
+    days_total: int
+    completion_pct: float
+
+
+class DailyHabitStatus(BaseModel):
+    commitment_id: int
+    habit_slug: str
+    habit_label: str
+    completed: bool
+    value: Optional[int] = None
+
+
+class DayEntry(BaseModel):
+    date: date
+    day_number: int
+    habits: list[DailyHabitStatus]
+    all_completed: bool
+    completed_count: int
+    total_count: int
+
+
+class ChallengeHistoryOut(BaseModel):
+    id: int
+    pack_id: Optional[str]
+    status: str
+    started_at: date
+    ends_at: date
+    total_days: int
+    days_elapsed: int
+    perfect_days: int
+    completion_pct: float
+    current_streak: int
+    longest_streak: int
+    shields_earned: int
+    shields_used: int
+    effective_streak: int
+    shield_used_on_dates: list[date]
+    habits: list[HabitHistoryEntry]
+    daily_logs: list[DayEntry]
+    model_config = {"from_attributes": True}

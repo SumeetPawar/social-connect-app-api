@@ -62,10 +62,12 @@ async def get_all_users(
     Get list of all users (admin only)
     """
     require_admin(current_user)
-    
-    # Use async select instead of query
+
+    # Return only users in the same department as the admin
     result = await db.execute(
-        select(User).order_by(User.created_at.desc())
+        select(User)
+        .where(User.department_id == current_user.department_id)
+        .order_by(User.created_at.desc())
     )
     users = result.scalars().all()
     

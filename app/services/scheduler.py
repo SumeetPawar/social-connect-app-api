@@ -194,32 +194,32 @@ async def nudge_challenge_participants():
 # )
 # logger.info("Job configured: rank snapshot @ 00:05 daily")
 
-# 2. Streak-at-risk alert — 20:00 (8 PM)
+# 2. Streak-at-risk alert — 20:00 (8 PM) IST
 scheduler.add_job(
     check_streak_at_risk,
-    CronTrigger(hour=20, minute=0),
+    CronTrigger(hour=20, minute=0, timezone="Asia/Kolkata"),
     id='streak_at_risk',
     replace_existing=True,
 )
-logger.info("Job configured: streak-at-risk alert @ 20:00 daily")
+logger.info("Job configured: streak-at-risk alert @ 20:00 IST daily")
 
-# 3. Evening step reminder — 21:00 (9 PM)
+# 3. Evening step reminder — 21:00 (9 PM) IST
 scheduler.add_job(
     check_and_send_reminders,
-    CronTrigger(hour=21, minute=0),
+    CronTrigger(hour=21, minute=0, timezone="Asia/Kolkata"),
     id='step_reminders',
     replace_existing=True,
 )
-logger.info("Job configured: step reminder @ 21:00 daily")
+logger.info("Job configured: step reminder @ 21:00 IST daily")
 
 # 4. Challenge step nudges — 12:00 (noon) only
 # scheduler.add_job(
 #     nudge_challenge_participants,
-#     CronTrigger(hour=12, minute=0),
+#     CronTrigger(hour=12, minute=0, timezone="Asia/Kolkata"),
 #     id='challenge_nudge_noon',
 #     replace_existing=True,
 # )
-# logger.info("Job configured: challenge nudges @ 12:00 daily")
+# logger.info("Job configured: challenge nudges @ 12:00 IST daily")
 
 # ─── TEST JOB: send one sample message every 10 mins to a specific user ───────
 async def _test_notification_job():

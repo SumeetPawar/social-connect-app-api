@@ -1,14 +1,20 @@
 from fastapi import APIRouter, Depends
 from app.auth.deps import get_current_user
 from app.db.deps import get_db
-from app.models import User
+from app.models import User, Department
 from typing import Optional
 from pydantic import BaseModel
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.schemas.profile import ProfileOut, ProfileUpdate
 
 router = APIRouter(prefix="/api/me", tags=["me"])
+
+
+class DepartmentOut(BaseModel):
+    id: str
+    name: str
 
 
 class MeOut(BaseModel):
@@ -17,6 +23,8 @@ class MeOut(BaseModel):
     email: str
     name: Optional[str]
     role: str
+    # department
+    department: Optional[DepartmentOut]
     # profile / body-composition personalisation fields
     age: Optional[int]
     gender: Optional[str]
@@ -28,17 +36,30 @@ class MeOut(BaseModel):
 
 
 @router.get("", response_model=MeOut)
-async def me(user: User = Depends(get_current_user)):
+async def me(
+    user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
     """
     Returns identity + profile data in one call.
     Frontend: call this ONCE on app load, store result in a global/context/store,
     and reuse everywhere. Do NOT call /me inside individual components.
     """
+    dept = None
+    if user.department_id:
+        dept_result = await db.execute(
+            select(Department).where(Department.id == user.department_id)
+        )
+        dept_row = dept_result.scalar_one_or_none()
+        if dept_row:
+            dept = DepartmentOut(id=str(dept_row.id), name=dept_row.name)
+
     return MeOut(
         id             = str(user.id),
         email          = user.email,
         name           = user.name,
         role           = user.role,
+        department     = dept,
         age            = user.age,
         gender         = user.gender,
         activity_level = user.activity_level,

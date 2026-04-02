@@ -26,7 +26,7 @@ def upgrade():
             id SERIAL PRIMARY KEY,
             slug VARCHAR(64) NOT NULL UNIQUE,
             label VARCHAR(255) NOT NULL,
-            desc VARCHAR(512) NOT NULL,
+            description VARCHAR(512) NOT NULL,
             why TEXT NOT NULL,
             impact VARCHAR(64) NOT NULL,
             category habitcategory NOT NULL,
@@ -39,9 +39,9 @@ def upgrade():
     conn.execute(sa.text("CREATE INDEX IF NOT EXISTS ix_habits_slug ON habits (slug)"))
 
     conn.execute(sa.text("""
-        CREATE TABLE IF NOT EXISTS challenges (
+        CREATE TABLE IF NOT EXISTS habit_challenges (
             id SERIAL PRIMARY KEY,
-            user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+            user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
             pack_id VARCHAR(64),
             status challengestatus NOT NULL DEFAULT 'active',
             started_at DATE NOT NULL,
@@ -49,12 +49,12 @@ def upgrade():
             created_at TIMESTAMPTZ DEFAULT now()
         )
     """))
-    conn.execute(sa.text("CREATE INDEX IF NOT EXISTS ix_challenges_user_id ON challenges (user_id)"))
+    conn.execute(sa.text("CREATE INDEX IF NOT EXISTS ix_habit_challenges_user_id ON habit_challenges (user_id)"))
 
     conn.execute(sa.text("""
         CREATE TABLE IF NOT EXISTS habit_commitments (
             id SERIAL PRIMARY KEY,
-            challenge_id INTEGER NOT NULL REFERENCES challenges(id) ON DELETE CASCADE,
+            challenge_id INTEGER NOT NULL REFERENCES habit_challenges(id) ON DELETE CASCADE,
             habit_id INTEGER NOT NULL REFERENCES habits(id),
             sort_order INTEGER NOT NULL DEFAULT 0,
             CONSTRAINT uq_commitment_habit UNIQUE (challenge_id, habit_id)
@@ -78,8 +78,9 @@ def upgrade():
 def downgrade():
     op.drop_table('daily_logs')
     op.drop_table('habit_commitments')
-    op.drop_table('challenges')
+    op.drop_table('habit_challenges')
     op.drop_table('habits')
     op.execute('DROP TYPE IF EXISTS challengestatus')
     op.execute('DROP TYPE IF EXISTS habittier')
+    op.execute('DROP TYPE IF EXISTS habitcategory')
     op.execute('DROP TYPE IF EXISTS habitcategory')

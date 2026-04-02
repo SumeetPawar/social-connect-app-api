@@ -65,6 +65,8 @@ class User(Base):
     created_at: Mapped[str] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)
     updated_at: Mapped[str] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)
 
+    habit_challenges: Mapped[list["HabitChallenge"]] = relationship(back_populates="user")
+
 
 class Team(Base):
     __tablename__ = "teams"
@@ -470,7 +472,7 @@ class Habit(Base):
     id:          Mapped[int]           = mapped_column(Integer, primary_key=True)
     slug:        Mapped[str]           = mapped_column(String(64), unique=True, nullable=False)
     label:       Mapped[str]           = mapped_column(String(255), nullable=False)
-    desc:        Mapped[str]           = mapped_column(String(512), nullable=False)
+    description: Mapped[str]           = mapped_column(String(512), nullable=False)
     why:         Mapped[str]           = mapped_column(Text, nullable=False)
     impact:      Mapped[str]           = mapped_column(String(64), nullable=False)
     category:    Mapped[HabitCategory] = mapped_column(SAEnum(HabitCategory), nullable=False)
@@ -482,18 +484,18 @@ class Habit(Base):
     commitments: Mapped[list["HabitCommitment"]] = relationship(back_populates="habit")
 
 
-class Challenge(Base):
-    __tablename__ = "challenges"
+class HabitChallenge(Base):
+    __tablename__ = "habit_challenges"
 
     id:         Mapped[int]             = mapped_column(Integer, primary_key=True)
-    user_id:    Mapped[int]             = mapped_column(Integer, ForeignKey("users.id", ondelete="CASCADE"))
+    user_id:    Mapped[str]             = mapped_column(UUID(as_uuid=True), ForeignKey("users.id", ondelete="CASCADE"))
     pack_id:    Mapped[str | None]      = mapped_column(String(64), nullable=True)
     status:     Mapped[ChallengeStatus] = mapped_column(SAEnum(ChallengeStatus), default=ChallengeStatus.active)
     started_at: Mapped[date]            = mapped_column(Date, nullable=False)
     ends_at:    Mapped[date]            = mapped_column(Date, nullable=False)
     created_at: Mapped[datetime]        = mapped_column(DateTime(timezone=True), server_default=func.now())
 
-    user:        Mapped["User"]                  = relationship(back_populates="challenges")
+    user:        Mapped["User"]                  = relationship(back_populates="habit_challenges")
     commitments: Mapped[list["HabitCommitment"]] = relationship(back_populates="challenge", cascade="all, delete-orphan")
 
 
@@ -502,11 +504,11 @@ class HabitCommitment(Base):
     __table_args__ = (UniqueConstraint("challenge_id", "habit_id"),)
 
     id:           Mapped[int] = mapped_column(Integer, primary_key=True)
-    challenge_id: Mapped[int] = mapped_column(Integer, ForeignKey("challenges.id", ondelete="CASCADE"))
+    challenge_id: Mapped[int] = mapped_column(Integer, ForeignKey("habit_challenges.id", ondelete="CASCADE"))
     habit_id:     Mapped[int] = mapped_column(Integer, ForeignKey("habits.id"))
     sort_order:   Mapped[int] = mapped_column(Integer, default=0)
 
-    challenge: Mapped["Challenge"]      = relationship(back_populates="commitments")
+    challenge: Mapped["HabitChallenge"]  = relationship(back_populates="commitments")
     habit:     Mapped["Habit"]          = relationship(back_populates="commitments")
     logs:      Mapped[list["DailyLog"]] = relationship(back_populates="commitment", cascade="all, delete-orphan")
 

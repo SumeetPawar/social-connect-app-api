@@ -35,7 +35,7 @@ async def get_available_challenges(
     Shows active challenges that the user can join.
     """
     today = date.today()
-    # Only keep department/company-wide condition
+    # Department filter: challenges explicitly assigned to user's dept OR company-wide (no dept assignment)
     dept_subquery = select(ChallengeDepartment.challenge_id).where(
         ChallengeDepartment.department_id == current_user.department_id
     )
@@ -45,9 +45,12 @@ async def get_available_challenges(
         .where(ChallengeDepartment.id.is_(None))
     )
     stmt = select(Challenge).where(
-        or_(
-            Challenge.id.in_(dept_subquery),
-            Challenge.id.in_(company_wide_subquery)
+        and_(
+            or_(
+                Challenge.id.in_(dept_subquery),
+                Challenge.id.in_(company_wide_subquery)
+            ),
+            Challenge.status == 'active'
         )
     ).order_by(Challenge.start_date)
 

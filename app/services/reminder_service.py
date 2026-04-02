@@ -313,8 +313,6 @@ async def send_step_reminders(db: AsyncSession):
         try:
             tz  = ZoneInfo(user.timezone or "Asia/Kolkata")
             now = datetime.now(tz)
-            if now.hour < 9:
-                continue
             steps = await _steps_today(db, user.id, now.date())
             if steps > 0:
                 continue  # already logged — no nudge
@@ -451,12 +449,14 @@ async def send_challenge_step_nudges(db: AsyncSession):
         title        = None
         body         = None
 
-        # Challenge-period completion % — vs full challenge goal (matches what the app shows)
+        # Challenge-period completion % — vs steps expected by today (elapsed days × target)
+        # Using elapsed days (not full duration) so "X% through challenge" reflects
+        # how on-track the user is right now, not a tiny fraction of the full 30-day goal.
         challenge_start    = row["challenge_start"]
         challenge_end      = row["challenge_end"]
-        total_days         = max((challenge_end - challenge_start).days + 1, 1)
-        total_challenge_goal = target * total_days
-        pct                = int(total_steps / total_challenge_goal * 100) if total_challenge_goal > 0 else 0
+        elapsed_days       = max((today - challenge_start).days + 1, 1)
+        expected_by_today  = target * elapsed_days
+        pct                = round(total_steps / expected_by_today * 100) if expected_by_today > 0 else 0
 
         # Already hit daily target — no nudge
         if steps_today >= target:
