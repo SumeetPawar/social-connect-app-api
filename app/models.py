@@ -529,3 +529,14 @@ class DailyLog(Base):
 
 # Also add to your User model:
 # challenges: Mapped[list["Challenge"]] = relationship(back_populates="user")
+
+
+class DailyPushCount(Base):
+    """Tracks how many push notifications a user has received on a given day.
+    Used for the per-user daily cap. Stored in the DB so it survives restarts
+    and is shared across worker processes."""
+    __tablename__ = "daily_push_counts"
+
+    user_id:   Mapped[str]  = mapped_column(UUID(as_uuid=True), ForeignKey("users.id", ondelete="CASCADE"), primary_key=True)
+    push_date: Mapped[date] = mapped_column(Date, nullable=False, primary_key=True)
+    count:     Mapped[int]  = mapped_column(Integer, nullable=False, default=0)

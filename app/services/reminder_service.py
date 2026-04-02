@@ -1,10 +1,14 @@
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select, text
+from sqlalchemy import select, text, func
 from datetime import datetime, date, timedelta
 from zoneinfo import ZoneInfo
 import random
 
-from app.models import User, DailySteps, PushSubscription
+from app.models import (
+    User, DailySteps, PushSubscription,
+    HabitChallenge, HabitCommitment, DailyLog, ChallengeStatus,
+    DailyPushCount,
+)
 from app.services.push_notify import send_web_push, PushResult
 import logging
 
@@ -12,6 +16,31 @@ logger = logging.getLogger(__name__)
 
 
 # ─── helpers ──────────────────────────────────────────────────────────────────
+
+# Daily push cap — stored in DB so it survives restarts and is shared across
+# worker processes. Real-time notifications (perfect day, milestone) bypass this.
+
+async def _try_claim_push_slot(db: AsyncSession, user_id: str, limit: int = 3) -> bool:
+    """
+    Atomically try to claim one push slot for today.
+
+    Uses a single PostgreSQL upsert so the check-and-increment is race-free
+    across restarts and multiple worker processes.
+
+    Returns True if a slot was claimed (count was < limit).
+    Returns False if the daily cap is already reached.
+    """
+    result = await db.execute(text("""
+        INSERT INTO daily_push_counts (user_id, push_date, count)
+        VALUES (:uid, :today, 1)
+        ON CONFLICT (user_id, push_date)
+        DO UPDATE SET count = daily_push_counts.count + 1
+        WHERE daily_push_counts.count < :limit
+        RETURNING count
+    """), {"uid": str(user_id), "today": date.today(), "limit": limit})
+    await db.commit()
+    return result.scalar_one_or_none() is not None
+
 
 # ─── Monthly Challenge Auto-Creation ──────────────────────────────────────────
 from sqlalchemy import insert
@@ -297,6 +326,88 @@ _NUDGE_BELOW_POOL = [
 ]
 
 
+# 7:30 AM — user has active habit challenge but nothing logged yet today
+_HABIT_MORNING_POOL = [
+    ("{name}, your habits are waiting 🌅",
+     "Start with one. The rest follow."),
+    ("Morning, {name} — habit time 🌿",
+     "Small steps today build big change."),
+    ("{name}, fresh day, fresh habits ✨",
+     "Your streak is counting on you."),
+    ("Rise and habit, {name} 🌞",
+     "A quick tap and today's yours."),
+    ("{name}, the best time is now 🎯",
+     "Open your habits and check one off."),
+    ("Good morning, {name} 👋",
+     "Your daily habits are ready for you."),
+]
+
+# 8:30 PM — user has ≥1 incomplete habit today
+_HABIT_EVENING_POOL = [
+    ("{name}, a few habits still to go 🌙",
+     "Quick check-in before the day ends."),
+    ("Almost there, {name} ✅",
+     "Finish your habits before midnight."),
+    ("{name}, your habits await 🌿",
+     "A few minutes and you're done for today."),
+    ("End the day strong, {name} 💪",
+     "Check off your remaining habits."),
+    ("{name}, don't break the chain 🔥",
+     "Complete today's habits to keep your streak."),
+    ("Night check-in, {name} 🌛",
+     "Your habits — quick and done."),
+]
+
+# Real-time — all habits completed for the day
+_HABIT_PERFECT_DAY_POOL = [
+    ("Perfect day, {name}! 🎉",
+     "Every habit done. That's a big deal."),
+    ("{name}, you crushed it today! 🏆",
+     "All habits complete. Streak growing!"),
+    ("100% today, {name} 🌟",
+     "Perfect day logged. Keep it going!"),
+    ("All done, {name}! ✨",
+     "Every habit checked off. You showed up."),
+]
+
+# Real-time — habit streak milestones (3/7/14/21/30 days)
+_HABIT_MILESTONE_POOL = [
+    ("{name}, {streak} days straight! 🔥",
+     "Your habit streak is on fire. Keep it up!"),
+    ("{streak}-day streak, {name}! 🎯",
+     "Consistency is your superpower."),
+    ("{name}, {streak} days of showing up 🌱",
+     "You're building something real."),
+    ("Milestone: {streak} days, {name} 🏅",
+     "That's real commitment. Be proud."),
+]
+
+# Sunday 8 PM — weekly progress summary
+_WEEKLY_SUMMARY_POOL = [
+    ("{name}, your week in review 📊",
+     "{steps:,} steps · {habit_pct}% habits done. Nice week!"),
+    ("Week done, {name}! 🎯",
+     "{steps:,} steps and {habit_pct}% of habits checked off."),
+    ("{name}, here's your weekly wrap 🌟",
+     "Steps: {steps:,} · Habits: {habit_pct}% complete."),
+]
+
+# Daily rank change notifications
+_RANK_UP_POOL = [
+    ("{name}, up to rank #{rank}! 📈",
+     "Climbed {moved} spot{s}. Keep the momentum!"),
+    ("Rank #{rank} — nice move, {name} 🚀",
+     "You climbed {moved} spot{s} today."),
+]
+
+_RANK_DOWN_POOL = [
+    ("{name}, dropped to rank #{rank} 📉",
+     "Down {moved} spot{s}. Today's a good day to push."),
+    ("Rank #{rank} now, {name} — time to climb 💪",
+     "Slipped {moved} spot{s}. Go get it back."),
+]
+
+
 # ─── 1. Evening step reminder (9 PM) ─────────────────────────────────────────
 
 async def send_step_reminders(db: AsyncSession):
@@ -322,6 +433,8 @@ async def send_step_reminders(db: AsyncSession):
             # Inactive cap: no steps in 3 days → only nudge on Mon/Wed/Fri/Sun
             active = await _had_steps_recently(db, user.id)
             if not active and not _is_nudge_day(now):
+                continue
+            if not await _try_claim_push_slot(db, user.id):
                 continue
             name = (user.name or "there").split()[0]
             title_tpl, body_tpl = random.choice(_EVENING_POOL)
@@ -364,6 +477,8 @@ async def send_streak_at_risk(db: AsyncSession):
             # Inactive cap (rare for streak holders, but guard anyway)
             active = await _had_steps_recently(db, user.id)
             if not active and not _is_nudge_day(now):
+                continue
+            if not await _try_claim_push_slot(db, user.id):
                 continue
             name = (user.name or "there").split()[0]
             title_tpl, body_tpl = random.choice(_STREAK_RISK_POOL)
@@ -490,6 +605,8 @@ async def send_challenge_step_nudges(db: AsyncSession):
             body  = body.format(name=name, steps=total_steps, pct=pct, challenge=challenge)
 
         try:
+            if not await _try_claim_push_slot(db, row["user_id"]):
+                continue
             subs = await _get_subscriptions(db, row["user_id"])
             sent = await _push_all(db, subs, {"title": title, "body": body, "url": url})
             if sent:
@@ -498,6 +615,301 @@ async def send_challenge_step_nudges(db: AsyncSession):
             logger.error(f"Challenge nudge error for user {row['user_id']}: {e}")
 
     logger.info(f"Challenge step nudges: notified {notified} users")
+    return notified
+
+
+# ─── 4. Habit morning reminder (7:30 AM) ─────────────────────────────────────
+
+async def send_habit_morning_reminder(db: AsyncSession):
+    """
+    7:30 AM daily — remind users with an active habit challenge who haven't logged anything yet.
+    """
+    logger.info("JOB: habit morning reminder")
+    today = date.today()
+    notified = 0
+
+    rows = await db.execute(text("""
+        SELECT DISTINCT
+            u.id         AS user_id,
+            u.name,
+            u.timezone,
+            hc.id        AS challenge_id
+        FROM users u
+        JOIN habit_challenges hc ON hc.user_id = u.id
+            AND hc.status   = 'active'
+            AND hc.ends_at >= :today
+        JOIN push_subscriptions ps ON ps.user_id = u.id
+    """), {"today": today})
+
+    for row in rows.mappings():
+        try:
+            done_row = await db.execute(text("""
+                SELECT COUNT(*) AS done
+                FROM daily_logs dl
+                JOIN habit_commitments hcm ON hcm.id = dl.commitment_id
+                WHERE hcm.challenge_id = :cid
+                  AND dl.logged_date   = :today
+                  AND dl.completed     = true
+            """), {"cid": row["challenge_id"], "today": today})
+            if (done_row.scalar() or 0) > 0:
+                continue  # already logged something today
+            if not await _try_claim_push_slot(db, row["user_id"]):
+                continue
+            name = (row["name"] or "there").split()[0]
+            title_tpl, body_tpl = random.choice(_HABIT_MORNING_POOL)
+            subs = await _get_subscriptions(db, row["user_id"])
+            sent = await _push_all(db, subs, {
+                "title": title_tpl.format(name=name),
+                "body":  body_tpl.format(name=name),
+                "url":   "/socialapp/habits",
+            })
+            if sent:
+                notified += 1
+        except Exception as e:
+            logger.error(f"Habit morning reminder error for user {row['user_id']}: {e}")
+
+    logger.info(f"Habit morning reminder: notified {notified} users")
+    return notified
+
+
+# ─── 5. Habit evening nudge (8:30 PM) ────────────────────────────────────────
+
+async def send_habit_evening_nudge(db: AsyncSession):
+    """
+    8:30 PM daily — nudge users who have ≥1 incomplete habit today.
+    """
+    logger.info("JOB: habit evening nudge")
+    today = date.today()
+    notified = 0
+
+    rows = await db.execute(text("""
+        SELECT DISTINCT
+            u.id  AS user_id,
+            u.name,
+            u.timezone,
+            hc.id AS challenge_id,
+            (SELECT COUNT(*) FROM habit_commitments hcm2 WHERE hcm2.challenge_id = hc.id)
+                AS total_habits,
+            COALESCE((
+                SELECT COUNT(*) FROM daily_logs dl
+                JOIN habit_commitments hcm ON hcm.id = dl.commitment_id
+                WHERE hcm.challenge_id = hc.id
+                  AND dl.logged_date   = :today
+                  AND dl.completed     = true
+            ), 0) AS done_today
+        FROM users u
+        JOIN habit_challenges hc ON hc.user_id = u.id
+            AND hc.status   = 'active'
+            AND hc.ends_at >= :today
+        JOIN push_subscriptions ps ON ps.user_id = u.id
+    """), {"today": today})
+
+    for row in rows.mappings():
+        try:
+            if row["done_today"] >= row["total_habits"]:
+                continue  # all habits done — no nudge needed
+            if not await _try_claim_push_slot(db, row["user_id"]):
+                continue
+            name = (row["name"] or "there").split()[0]
+            title_tpl, body_tpl = random.choice(_HABIT_EVENING_POOL)
+            subs = await _get_subscriptions(db, row["user_id"])
+            sent = await _push_all(db, subs, {
+                "title": title_tpl.format(name=name),
+                "body":  body_tpl.format(name=name),
+                "url":   "/socialapp/habits",
+            })
+            if sent:
+                notified += 1
+        except Exception as e:
+            logger.error(f"Habit evening nudge error for user {row['user_id']}: {e}")
+
+    logger.info(f"Habit evening nudge: notified {notified} users")
+    return notified
+
+
+# ─── 6. Real-time: perfect day celebration ───────────────────────────────────
+
+async def fire_habit_perfect_day(db: AsyncSession, user_id: str, challenge_id: int) -> None:
+    """Fire a celebration push the moment a user completes every habit for today."""
+    try:
+        user_row = await db.execute(
+            select(User).where(User.id == user_id)
+        )
+        user = user_row.scalar_one_or_none()
+        if not user:
+            return
+        name = (user.name or "there").split()[0]
+        title_tpl, body_tpl = random.choice(_HABIT_PERFECT_DAY_POOL)
+        subs = await _get_subscriptions(db, user_id)
+        await _push_all(db, subs, {
+            "title": title_tpl.format(name=name),
+            "body":  body_tpl.format(name=name),
+            "url":   "/socialapp/habits",
+        })
+        logger.info(f"Perfect-day push sent to user {user_id} (challenge {challenge_id})")
+    except Exception as e:
+        logger.error(f"fire_habit_perfect_day error for user {user_id}: {e}")
+
+
+# ─── 7. Real-time: streak milestone ──────────────────────────────────────────
+
+async def fire_habit_streak_milestone(db: AsyncSession, user_id: str, streak: int) -> None:
+    """Fire a milestone push when a user's habit streak reaches 3/7/14/21/30 days."""
+    try:
+        user_row = await db.execute(
+            select(User).where(User.id == user_id)
+        )
+        user = user_row.scalar_one_or_none()
+        if not user:
+            return
+        name = (user.name or "there").split()[0]
+        title_tpl, body_tpl = random.choice(_HABIT_MILESTONE_POOL)
+        subs = await _get_subscriptions(db, user_id)
+        await _push_all(db, subs, {
+            "title": title_tpl.format(name=name, streak=streak),
+            "body":  body_tpl.format(name=name, streak=streak),
+            "url":   "/socialapp/habits",
+        })
+        logger.info(f"Streak-milestone push ({streak} days) sent to user {user_id}")
+    except Exception as e:
+        logger.error(f"fire_habit_streak_milestone error for user {user_id}: {e}")
+
+
+# ─── 8. Weekly summary (Sunday 8 PM) ─────────────────────────────────────────
+
+async def send_weekly_summary(db: AsyncSession):
+    """
+    Sunday 8 PM — push a weekly recap: steps logged + habit completion % for the past 7 days.
+    """
+    logger.info("JOB: weekly summary")
+    today = date.today()
+    week_start = today - timedelta(days=6)
+    notified = 0
+
+    users = await _users_with_subscriptions(db)
+    for user in users:
+        try:
+            steps_row = await db.execute(text("""
+                SELECT COALESCE(SUM(steps), 0) AS weekly_steps
+                FROM daily_steps
+                WHERE user_id = :uid AND day >= :start AND day <= :today
+            """), {"uid": str(user.id), "start": week_start, "today": today})
+            weekly_steps = int(steps_row.scalar() or 0)
+
+            habit_row = await db.execute(text("""
+                SELECT
+                    COUNT(DISTINCT hcm.id)                                    AS total_habits,
+                    COALESCE(SUM(CASE WHEN dl.completed THEN 1 ELSE 0 END), 0) AS done_count
+                FROM habit_challenges hc
+                JOIN habit_commitments hcm ON hcm.challenge_id = hc.id
+                LEFT JOIN daily_logs dl
+                    ON dl.commitment_id  = hcm.id
+                    AND dl.logged_date  >= :start
+                    AND dl.logged_date  <= :today
+                WHERE hc.user_id = :uid AND hc.status = 'active'
+            """), {"uid": str(user.id), "start": week_start, "today": today})
+            h = habit_row.mappings().first()
+            habit_pct = 0
+            if h and h["total_habits"] > 0:
+                expected = h["total_habits"] * 7
+                habit_pct = round(h["done_count"] / expected * 100)
+
+            if not await _try_claim_push_slot(db, user.id):
+                continue
+            name = (user.name or "there").split()[0]
+            title_tpl, body_tpl = random.choice(_WEEKLY_SUMMARY_POOL)
+            subs = await _get_subscriptions(db, user.id)
+            sent = await _push_all(db, subs, {
+                "title": title_tpl.format(name=name),
+                "body":  body_tpl.format(name=name, steps=weekly_steps, habit_pct=habit_pct),
+                "url":   "/socialapp",
+            })
+            if sent:
+                notified += 1
+        except Exception as e:
+            logger.error(f"Weekly summary error for user {user.id}: {e}")
+
+    logger.info(f"Weekly summary: notified {notified} users")
+    return notified
+
+
+# ─── 9. Rank change notifications (daily after rank snapshot) ─────────────────
+
+async def send_rank_change_notifications(db: AsyncSession):
+    """
+    Run after the 00:05 rank snapshot. Compares live rank vs previous_rank and
+    pushes a rank-up or rank-down notification to users whose rank changed.
+    """
+    logger.info("JOB: rank change notifications")
+    today = date.today()
+    notified = 0
+
+    challenges = await db.execute(
+        text("SELECT id, start_date, end_date FROM challenges WHERE status = 'active'")
+    )
+    for ch in challenges.mappings().all():
+        try:
+            end_cap = min(ch["end_date"], today)
+
+            live_ranks = await db.execute(text("""
+                WITH totals AS (
+                    SELECT cp.user_id,
+                           COALESCE(SUM(ds.steps), 0) AS total_steps
+                    FROM challenge_participants cp
+                    LEFT JOIN daily_steps ds
+                        ON ds.user_id = cp.user_id
+                        AND ds.day   >= :start
+                        AND ds.day   <= :today
+                    WHERE cp.challenge_id = :cid AND cp.left_at IS NULL
+                    GROUP BY cp.user_id
+                )
+                SELECT user_id,
+                       ROW_NUMBER() OVER (ORDER BY total_steps DESC) AS rank
+                FROM totals
+            """), {"cid": ch["id"], "start": ch["start_date"], "today": end_cap})
+            live_map = {str(r["user_id"]): int(r["rank"]) for r in live_ranks.mappings()}
+
+            prev_rows = await db.execute(text("""
+                SELECT user_id, previous_rank
+                FROM challenge_participants
+                WHERE challenge_id = :cid
+                  AND left_at      IS NULL
+                  AND previous_rank IS NOT NULL
+            """), {"cid": ch["id"]})
+
+            for row in prev_rows.mappings():
+                uid = str(row["user_id"])
+                prev_rank = int(row["previous_rank"])
+                curr_rank = live_map.get(uid)
+                if curr_rank is None or prev_rank == curr_rank:
+                    continue
+
+                moved = abs(prev_rank - curr_rank)
+                went_up = curr_rank < prev_rank
+                s = "" if moved == 1 else "s"
+
+                user_row = await db.execute(select(User).where(User.id == uid))
+                user = user_row.scalar_one_or_none()
+                if not user:
+                    continue
+
+                if not await _try_claim_push_slot(db, uid):
+                    continue
+                name = (user.name or "there").split()[0]
+                pool = _RANK_UP_POOL if went_up else _RANK_DOWN_POOL
+                title_tpl, body_tpl = random.choice(pool)
+                subs = await _get_subscriptions(db, uid)
+                sent = await _push_all(db, subs, {
+                    "title": title_tpl.format(name=name, rank=curr_rank, moved=moved, s=s),
+                    "body":  body_tpl.format(name=name, rank=curr_rank, moved=moved, s=s),
+                    "url":   f"/socialapp/challanges/{ch['id']}/steps",
+                })
+                if sent:
+                    notified += 1
+        except Exception as e:
+            logger.error(f"Rank change error for challenge {ch['id']}: {e}")
+
+    logger.info(f"Rank change notifications: notified {notified} users")
     return notified
 
 

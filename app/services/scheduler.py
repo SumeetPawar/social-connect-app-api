@@ -8,6 +8,10 @@ from app.services.reminder_service import (
     send_challenge_step_nudges,
     send_test_notification_to_user,
     create_next_monthly_challenge_and_enroll_users,
+    send_habit_morning_reminder,
+    send_habit_evening_nudge,
+    send_weekly_summary,
+    send_rank_change_notifications,
 )
 import logging
 
@@ -188,11 +192,11 @@ async def nudge_challenge_participants():
 # 1. Daily rank snapshot — 00:05 (still needed for leaderboard UI)
 # scheduler.add_job(
 #     update_all_previous_ranks,
-#     CronTrigger(hour=0, minute=5),
+#     CronTrigger(hour=0, minute=5, timezone="Asia/Kolkata"),
 #     id='update_previous_ranks',
 #     replace_existing=True,
 # )
-# logger.info("Job configured: rank snapshot @ 00:05 daily")
+# logger.info("Job configured: rank snapshot @ 00:05 IST daily")
 
 # 2. Streak-at-risk alert — 20:00 (8 PM) IST
 scheduler.add_job(
@@ -212,14 +216,93 @@ scheduler.add_job(
 )
 logger.info("Job configured: step reminder @ 21:00 IST daily")
 
-# 4. Challenge step nudges — 12:00 (noon) only
+# 4. Challenge step nudges — 12:00 (noon) and 16:00 (4 PM)
+scheduler.add_job(
+    nudge_challenge_participants,
+    CronTrigger(hour=12, minute=0, timezone="Asia/Kolkata"),
+    id='challenge_nudge_noon',
+    replace_existing=True,
+)
+logger.info("Job configured: challenge nudges @ 12:00 IST daily")
+
+scheduler.add_job(
+    nudge_challenge_participants,
+    CronTrigger(hour=16, minute=0, timezone="Asia/Kolkata"),
+    id='challenge_nudge_4pm',
+    replace_existing=True,
+)
+logger.info("Job configured: challenge nudges @ 16:00 IST daily")
+
+
+# ─── Habit challenge jobs ──────────────────────────────────────────────────────
+
+async def habit_morning_job():
+    async with AsyncSessionLocal() as db:
+        try:
+            await send_habit_morning_reminder(db)
+        except Exception as e:
+            logger.error(f"Error in habit morning reminder job: {e}", exc_info=True)
+
+
+async def habit_evening_job():
+    async with AsyncSessionLocal() as db:
+        try:
+            await send_habit_evening_nudge(db)
+        except Exception as e:
+            logger.error(f"Error in habit evening nudge job: {e}", exc_info=True)
+
+
+async def weekly_summary_job():
+    async with AsyncSessionLocal() as db:
+        try:
+            await send_weekly_summary(db)
+        except Exception as e:
+            logger.error(f"Error in weekly summary job: {e}", exc_info=True)
+
+
+async def rank_change_job():
+    async with AsyncSessionLocal() as db:
+        try:
+            await send_rank_change_notifications(db)
+        except Exception as e:
+            logger.error(f"Error in rank change notification job: {e}", exc_info=True)
+
+
+# 5. Habit morning reminder — 07:30 IST
+scheduler.add_job(
+    habit_morning_job,
+    CronTrigger(hour=7, minute=30, timezone="Asia/Kolkata"),
+    id='habit_morning_reminder',
+    replace_existing=True,
+)
+logger.info("Job configured: habit morning reminder @ 07:30 IST daily")
+
+# 6. Habit evening nudge — 20:30 IST
+scheduler.add_job(
+    habit_evening_job,
+    CronTrigger(hour=20, minute=30, timezone="Asia/Kolkata"),
+    id='habit_evening_nudge',
+    replace_existing=True,
+)
+logger.info("Job configured: habit evening nudge @ 20:30 IST daily")
+
+# 7. Weekly summary — Sunday 20:00 IST
+scheduler.add_job(
+    weekly_summary_job,
+    CronTrigger(day_of_week='sun', hour=20, minute=0, timezone="Asia/Kolkata"),
+    id='weekly_summary',
+    replace_existing=True,
+)
+logger.info("Job configured: weekly summary @ 20:00 IST every Sunday")
+
+# 8. Rank change notifications — 21:30 IST (after step reminders, using day's snapshot)
 # scheduler.add_job(
-#     nudge_challenge_participants,
-#     CronTrigger(hour=12, minute=0, timezone="Asia/Kolkata"),
-#     id='challenge_nudge_noon',
+#     rank_change_job,
+#     CronTrigger(hour=21, minute=30, timezone="Asia/Kolkata"),
+#     id='rank_change_notifications',
 #     replace_existing=True,
 # )
-# logger.info("Job configured: challenge nudges @ 12:00 IST daily")
+# logger.info("Job configured: rank change notifications @ 21:30 IST daily")
 
 # ─── TEST JOB: send one sample message every 10 mins to a specific user ───────
 async def _test_notification_job():
@@ -248,11 +331,11 @@ scheduler.add_job(
 )
 logger.info("Job configured: monthly challenge creation @ 23:55 last day of month")
 
-scheduler.add_job(
-    _test_notification_job,
-    "interval",
-    minutes=4,
-    id="test_notification",
-    replace_existing=True,
-)
-logger.info("TEST JOB configured: sample notification every 4 mins")
+# scheduler.add_job(
+#     _test_notification_job,
+#     "interval",
+#     minutes=4,
+#     id="test_notification",
+#     replace_existing=True,
+# )
+# logger.info("TEST JOB configured: sample notification every 4 mins")

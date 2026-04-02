@@ -101,7 +101,11 @@ async def test_push_notification(
 
 @router.post("/trigger/{job}")
 async def trigger_notification_job(
-    job: Literal["step_reminder", "streak_at_risk", "rank_changes", "weekly_summary"],
+    job: Literal[
+        "step_reminder", "streak_at_risk",
+        "rank_changes", "weekly_summary",
+        "habit_morning", "habit_evening", "challenge_nudge",
+    ],
     db: AsyncSession = Depends(get_db),
     user: User = Depends(get_current_user),
 ):
@@ -123,13 +127,19 @@ async def trigger_notification_job(
         send_streak_at_risk,
         send_rank_change_notifications,
         send_weekly_summary,
+        send_habit_morning_reminder,
+        send_habit_evening_nudge,
+        send_challenge_step_nudges,
     )
 
     job_map = {
-        "step_reminder":  send_step_reminders,
-        "streak_at_risk": send_streak_at_risk,
-        "rank_changes":   send_rank_change_notifications,
-        "weekly_summary": send_weekly_summary,
+        "step_reminder":   send_step_reminders,
+        "streak_at_risk":  send_streak_at_risk,
+        "rank_changes":    send_rank_change_notifications,
+        "weekly_summary":  send_weekly_summary,
+        "habit_morning":   send_habit_morning_reminder,
+        "habit_evening":   send_habit_evening_nudge,
+        "challenge_nudge": send_challenge_step_nudges,
     }
 
     count = await job_map[job](db)

@@ -1,12 +1,15 @@
 from collections import defaultdict
 from datetime import date, timedelta
-from sqlalchemy import select
+from sqlalchemy import select, func
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 from fastapi import HTTPException
 
 from app.models import HabitChallenge, ChallengeStatus, DailyLog, Habit, HabitCommitment
 from app.schemas.habits import ChallengeCreate
+from app.services.reminder_service import fire_habit_perfect_day, fire_habit_streak_milestone
+
+_STREAK_MILESTONES = {3, 7, 14, 21, 30}
 async def _get_habit(db: AsyncSession, slug: str) -> Habit:
     result = await db.execute(select(Habit).where(Habit.slug == slug))
     h = result.scalar_one_or_none()
@@ -125,6 +128,30 @@ async def upsert_log(db: AsyncSession, user_id: str, commitment_id: int,
 
     # Compute streak details after logging
     streak = await get_streak(db, challenge_id, user_id)
+
+    # Real-time push notifications
+    if completed:
+        total_result = await db.execute(
+            select(func.count()).where(HabitCommitment.challenge_id == challenge_id)
+        )
+        total_habits = total_result.scalar() or 0
+
+        done_result = await db.execute(
+            select(func.count())
+            .select_from(DailyLog)
+            .join(HabitCommitment, DailyLog.commitment_id == HabitCommitment.id)
+            .where(
+                HabitCommitment.challenge_id == challenge_id,
+                DailyLog.logged_date == logged_date,
+                DailyLog.completed == True,
+            )
+        )
+        done_today = done_result.scalar() or 0
+
+        if total_habits > 0 and done_today >= total_habits:
+            await fire_habit_perfect_day(db, user_id, challenge_id)
+        elif streak.get("current_streak", 0) in _STREAK_MILESTONES:
+            await fire_habit_streak_milestone(db, user_id, streak["current_streak"])
 
     return {
         "id": log.id,
