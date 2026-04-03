@@ -24,7 +24,6 @@ class Settings(BaseSettings):
     # Reads ANTHROPIC_API_KEY from env automatically; no extra field needed.
 
     # Azure OpenAI (used when AI_PROVIDER=azure)
-    # REMOVED_SECRET
     AZURE_OPENAI_ENDPOINT: str = os.getenv("AZURE_OPENAI_ENDPOINT", "https://sumee-mnj0fhty-eastus2.cognitiveservices.azure.com/")          # e.g. https://your-resource.openai.azure.com
     AZURE_OPENAI_API_KEY: str = os.getenv("AZURE_OPENAI_API_KEY", "")
     AZURE_OPENAI_DEPLOYMENT: str = os.getenv("AZURE_OPENAI_DEPLOYMENT", "gpt-5.3-chat") # your deployment name
