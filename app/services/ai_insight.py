@@ -417,11 +417,10 @@ async def _ask_azure(stats: dict) -> dict:
         response = await client.chat.completions.create(
             model=settings.AZURE_OPENAI_DEPLOYMENT,
             messages=[
-                {"role": "system", "content": _SYSTEM},
+                {"role": "system", "content": _SYSTEM + "\nRespond in valid JSON."},
                 {"role": "user",   "content": _build_user_message(stats)},
             ],
-            max_tokens=1024,
-            temperature=0.5,
+            max_completion_tokens=1024,
             response_format={"type": "json_object"},
         )
         raw = response.choices[0].message.content or "{}"

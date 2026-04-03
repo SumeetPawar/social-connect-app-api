@@ -84,11 +84,10 @@ async def _ask_ai(system: str, user_msg: str) -> str:
         response = await client.chat.completions.create(
             model=settings.AZURE_OPENAI_DEPLOYMENT,
             messages=[
-                {"role": "system", "content": system},
+                {"role": "system", "content": system + "\nRespond in valid JSON."},
                 {"role": "user",   "content": user_msg},
             ],
-            max_tokens=1200,
-            temperature=0.4,
+            max_completion_tokens=1200,
             response_format={"type": "json_object"},
         )
         return response.choices[0].message.content or "{}"
