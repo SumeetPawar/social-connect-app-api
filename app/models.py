@@ -571,3 +571,45 @@ class AiInsight(Base):
     created_at:   Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
     __table_args__ = (UniqueConstraint("user_id", "insight_date", name="uq_ai_insight_user_date"),)
+
+
+class AiRecommendation(Base):
+    """
+    Generic AI recommendation store.
+    type = "body_insight" | "habit_picks" | "step_goal"
+    payload = type-specific JSON — see ai_recommendations.py for each schema.
+    Cached per user per type for 7 days.
+    """
+    __tablename__ = "ai_recommendations"
+
+    id:         Mapped[int]      = mapped_column(Integer, primary_key=True)
+    user_id:    Mapped[str]      = mapped_column(UUID(as_uuid=True), ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
+    type:       Mapped[str]      = mapped_column(Text, nullable=False)
+    provider:   Mapped[str]      = mapped_column(Text, nullable=False)
+    payload:    Mapped[dict]     = mapped_column(JSONB, nullable=False)
+    raw_stats:  Mapped[dict]     = mapped_column(JSONB, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+
+class AiCoachReport(Base):
+    """
+    On-demand AI coach report — a deeper analysis of the last 30 days.
+    Cached per user per week (re-generated only if the last report is >7 days old).
+
+    Output structure (all JSONB):
+      went_well   — list of {title, body} — things done well
+      improve     — list of {title, body, suggestion} — gaps with actionable tips
+      focus       — the single most impactful next action (plain text)
+      summary     — one-paragraph plain-text coach intro
+    """
+    __tablename__ = "ai_coach_reports"
+
+    id:          Mapped[int]      = mapped_column(Integer, primary_key=True)
+    user_id:     Mapped[str]      = mapped_column(UUID(as_uuid=True), ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
+    provider:    Mapped[str]      = mapped_column(Text, nullable=False)
+    went_well:   Mapped[list]     = mapped_column(JSONB, nullable=False)
+    improve:     Mapped[list]     = mapped_column(JSONB, nullable=False)
+    focus:       Mapped[str]      = mapped_column(Text, nullable=False)
+    summary:     Mapped[str]      = mapped_column(Text, nullable=False)
+    raw_stats:   Mapped[dict]     = mapped_column(JSONB, nullable=False)
+    created_at:  Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())

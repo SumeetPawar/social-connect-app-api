@@ -105,7 +105,7 @@ async def trigger_notification_job(
         "step_reminder", "streak_at_risk",
         "rank_changes", "weekly_summary",
         "habit_morning", "habit_evening", "challenge_nudge",
-        "habit_cycle_summary",
+        "habit_cycle_summary", "nightly_insights",
     ],
     db: AsyncSession = Depends(get_db),
     user: User = Depends(get_current_user),
@@ -133,6 +133,7 @@ async def trigger_notification_job(
         send_challenge_step_nudges,
         send_habit_cycle_summary,
     )
+    from app.services.ai_insight import generate_nightly_insights
 
     job_map = {
         "step_reminder":      send_step_reminders,
@@ -143,6 +144,7 @@ async def trigger_notification_job(
         "habit_evening":      send_habit_evening_nudge,
         "challenge_nudge":    send_challenge_step_nudges,
         "habit_cycle_summary": send_habit_cycle_summary,
+        "nightly_insights":   generate_nightly_insights,
     }
 
     count = await job_map[job](db)

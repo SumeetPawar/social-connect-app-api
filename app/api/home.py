@@ -136,7 +136,7 @@ async def home(
         }
 
     # ── AI insight ────────────────────────────────────────────────────────────
-    insight = await get_home_insight(db, uid)
+    insight = await get_home_insight(db, str(uid))
 
     return {
         "steps": {

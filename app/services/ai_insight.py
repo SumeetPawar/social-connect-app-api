@@ -70,15 +70,12 @@ def _get_azure():
 
 # ── public entry point ────────────────────────────────────────────────────────
 
-async def get_home_insight(db: AsyncSession, user_id: str) -> dict:
+async def get_home_insight(db: AsyncSession, user_id: str) -> dict | None:
     """
-    Return today's insight for the user.
-    Hits the DB cache first; calls the AI only if no entry exists for today.
+    Return today's pre-generated insight for the user, or None if not ready yet.
+    Insights are generated nightly by the scheduler — never on demand here.
     """
     today = date.today()
-    provider = settings.AI_PROVIDER.lower()
-
-    # Cache lookup
     cached = await db.execute(
         select(AiInsight).where(
             AiInsight.user_id == user_id,
@@ -93,30 +90,76 @@ async def get_home_insight(db: AsyncSession, user_id: str) -> dict:
             "detail":   row.detail,
             "hook":     row.hook,
         }
+    return None
 
-    # Generate fresh
-    stats = await _collect_stats(db, user_id)
-    insight = await _call_provider(stats, provider)
 
-    # Persist (upsert — safe if two requests race)
-    try:
-        db.add(AiInsight(
-            user_id=user_id,
-            insight_date=today,
-            provider=provider,
-            badge=insight["badge"],
-            segments=insight["segments"],
-            detail=insight["detail"],
-            hook=insight["hook"],
-            raw_stats=stats,
-        ))
-        await db.commit()
-    except Exception as e:
-        # Duplicate key from concurrent request — ignore, still return insight
-        await db.rollback()
-        logger.debug(f"AI insight upsert skipped (likely race): {e}")
+async def generate_nightly_insights(db: AsyncSession) -> int:
+    """
+    Nightly scheduled job — runs after midnight (00:30 IST).
+    Generates a daily insight for every user who has push subscriptions or
+    active habit/step data. Stores insight_date = today (the new day),
+    stats collected from yesterday.
+    Skips users who already have a row for today (safe to re-run).
+    Returns count of insights generated.
+    """
+    from sqlalchemy import text as _text
+    today = date.today()
+    provider = settings.AI_PROVIDER.lower()
+    generated = 0
 
-    return insight
+    # All distinct users who have any recent activity or subscriptions
+    users_row = await db.execute(_text("""
+        SELECT DISTINCT u.id
+        FROM users u
+        WHERE EXISTS (
+            SELECT 1 FROM daily_steps ds
+            WHERE ds.user_id = u.id AND ds.day >= :since
+        ) OR EXISTS (
+            SELECT 1 FROM habit_challenges hc
+            WHERE hc.user_id = u.id AND hc.status = 'active'
+        ) OR EXISTS (
+            SELECT 1 FROM push_subscriptions ps
+            WHERE ps.user_id = u.id
+        )
+    """), {"since": today - timedelta(days=14)})
+    user_ids = [str(r[0]) for r in users_row.all()]
+
+    logger.info(f"Nightly insight job: generating for {len(user_ids)} users")
+
+    for uid in user_ids:
+        try:
+            # Skip if already generated today
+            existing = await db.execute(
+                select(AiInsight).where(
+                    AiInsight.user_id == uid,
+                    AiInsight.insight_date == today,
+                )
+            )
+            if existing.scalar_one_or_none():
+                continue
+
+            stats = await _collect_stats(db, uid)
+            insight = await _call_provider(stats, provider)
+
+            db.add(AiInsight(
+                user_id=uid,
+                insight_date=today,
+                provider=provider,
+                badge=insight["badge"],
+                segments=insight["segments"],
+                detail=insight["detail"],
+                hook=insight["hook"],
+                raw_stats=stats,
+            ))
+            await db.commit()
+            generated += 1
+            logger.debug(f"Insight generated for user {uid}")
+        except Exception as e:
+            await db.rollback()
+            logger.error(f"Nightly insight error for user {uid}: {e}")
+
+    logger.info(f"Nightly insight job: generated {generated} new insights")
+    return generated
 
 
 # ── data collection ───────────────────────────────────────────────────────────
@@ -217,12 +260,9 @@ async def _collect_stats(db: AsyncSession, user_id: str) -> dict:
             WHERE hc.user_id = :uid AND hc.status = 'active'
               AND dl.logged_date >= :week_start AND dl.completed
             GROUP BY dl.logged_date
-            HAVING COUNT(*) = (
-                SELECT COUNT(*) FROM habit_commitments hcm2
-                WHERE hcm2.challenge_id = hc.id
-            )
+            HAVING COUNT(*) >= :total_habits
         ) t
-    """), {"uid": str(user_id), "week_start": week_start})
+    """), {"uid": str(user_id), "week_start": week_start, "total_habits": max(total, 1)})
     perfect_days = int(perfect_days_row.scalar() or 0)
 
     return {

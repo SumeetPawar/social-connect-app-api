@@ -4,7 +4,7 @@ app/api/body_metrics.py
 Body composition scan tracking — save scans, fetch latest, fetch history.
 All periods returned in a single /history call.
 """
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, and_
 from datetime import date, timedelta
@@ -15,6 +15,7 @@ from app.db.deps import get_db
 from app.auth.deps import get_current_user
 from app.models import User, BodyMetrics
 from app.schemas.body_metrics import BodyMetricCreate, BodyMetricOut, HistoryResponse, HistoryResponse          # adjust import path if needed
+from app.services.ai_recommendations import get_body_insight
 
 router = APIRouter(prefix="/api/body-metrics", tags=["Body Metrics"])
  
@@ -140,3 +141,38 @@ async def get_history(
         m6  = [r for r in all_records if r.recorded_date >= cutoffs["m6"]],
         m3  = [r for r in all_records if r.recorded_date >= cutoffs["m3"]],
     )
+
+
+@router.get("/insight")
+async def body_ai_insight(
+    refresh: bool = Query(default=False),
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """
+    AI analysis of body composition trends across all logged scans.
+
+    Returns:
+      - trend_summary : overall 2-3 sentence picture
+      - highlights    : [{metric, direction, note}] — key metrics with plain-English notes
+      - warning       : most important thing to watch (null if nothing concerning)
+      - tip           : one specific, actionable lifestyle recommendation
+
+    Cached 7 days. Use ?refresh=true to force regeneration.
+    Returns 404 if no body scans have been logged yet.
+    """
+    if refresh:
+        from sqlalchemy import delete
+        from app.models import AiRecommendation
+        await db.execute(
+            delete(AiRecommendation).where(
+                AiRecommendation.user_id == str(current_user.id),
+                AiRecommendation.type == "body_insight",
+            )
+        )
+        await db.commit()
+
+    result = await get_body_insight(db, str(current_user.id))
+    if result is None:
+        raise HTTPException(404, "No body scans found — log at least one measurement first.")
+    return result

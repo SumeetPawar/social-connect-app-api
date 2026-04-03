@@ -14,6 +14,7 @@ from app.services.reminder_service import (
     send_rank_change_notifications,
     send_habit_cycle_summary,
 )
+from app.services.ai_insight import generate_nightly_insights
 import logging
 
 
@@ -296,7 +297,24 @@ scheduler.add_job(
 )
 logger.info("Job configured: weekly summary @ 20:00 IST every Sunday")
 
-# 8. Habit cycle completion summary — 21:00 IST (challenges ending today)
+# 8. Nightly AI insight generation — 00:30 IST (after midnight, uses yesterday's data)
+async def nightly_insight_job():
+    async with AsyncSessionLocal() as db:
+        try:
+            await generate_nightly_insights(db)
+        except Exception as e:
+            logger.error(f"Error in nightly insight job: {e}", exc_info=True)
+
+
+scheduler.add_job(
+    nightly_insight_job,
+    CronTrigger(hour=0, minute=30, timezone="Asia/Kolkata"),
+    id='nightly_ai_insights',
+    replace_existing=True,
+)
+logger.info("Job configured: nightly AI insight generation @ 00:30 IST daily")
+
+# 9. Habit cycle completion summary — 21:00 IST (challenges ending today)
 async def habit_cycle_summary_job():
     async with AsyncSessionLocal() as db:
         try:
