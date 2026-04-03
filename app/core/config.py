@@ -14,6 +14,19 @@ class Settings(BaseSettings):
     CORS_ORIGINS: list[str] = ["http://localhost:3000", "http://127.0.0.1:3000", "https://192.168.4.5:3000","http://192.168.4.5:3000","https://social-app-ui-qa.azurewebsites.net","https://cbiqa.dev.honeywellcloud.com"]
     VAPID_PUBLIC_KEY: str = "BKBAzuVjLcwZxhflTsS79lz2cWz6MYIATlyuSs07MTmI1uRFSAITiCbpXz25_BeeoC3nAJA425oOhwxkOyXFvPQ"
     VAPID_PRIVATE_KEY: str = "CjkoYuaMHbxAkkXLWbwi6gxnWhMkbeCiWF-rNDQT1pE"
+
+    # ── AI provider ───────────────────────────────────────────────────────────
+    # AI_PROVIDER: "anthropic" (default) | "azure"
+    AI_PROVIDER: str = "anthropic"
+
+    # Anthropic (used when AI_PROVIDER=anthropic)
+    # Reads ANTHROPIC_API_KEY from env automatically; no extra field needed.
+
+    # Azure OpenAI (used when AI_PROVIDER=azure)
+    AZURE_OPENAI_ENDPOINT: str = ""          # e.g. https://your-resource.openai.azure.com
+    AZURE_OPENAI_API_KEY: str = ""
+    AZURE_OPENAI_DEPLOYMENT: str = "gpt-4o" # your deployment name
+    AZURE_OPENAI_API_VERSION: str = "2025-01-01-preview"
     
     class Config:
         env_file = BASE_DIR / ".env"

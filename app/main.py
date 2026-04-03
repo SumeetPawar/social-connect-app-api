@@ -15,6 +15,7 @@ from app.api.admin import router as admin_router
 from app.api.challenges import router as challenges_router
 from app.api.goal_definitions import router as goal_definitions_router
 from app.api.habits import habits_router, challenges_router as habit_challenges_router
+from app.api.home import router as home_router
 from fastapi.middleware.cors import CORSMiddleware
 from contextlib import asynccontextmanager
 import asyncio
@@ -102,6 +103,7 @@ app.include_router(goal_definitions_router)
 app.include_router(challenges_router)
 app.include_router(habits_router)
 app.include_router(habit_challenges_router)
+app.include_router(home_router)
 app.include_router(admin_router)  # Add this line
 
 
@@ -116,3 +118,16 @@ if __name__ == "__main__":
         port=port,
         reload=False
     )
+
+
+
+#     /api/home  —  single endpoint that feeds the home screen.
+
+# {
+#   "steps": { "yesterday": 8240, "today": 0, "daily_target": 8000, "pct": 0, "step_streak": 6 },
+#   "challenge": { "id": "...", "rank": 5, "rank_change": 1 },
+#   "habits": { "challenge_id": 3, "day_number": 6, "total_days": 21, "completed_count": 3, "total_count": 5, "all_done": false },
+#   "habit_streak": 6,
+#   "ai_insight": { "badge": "Best Tuesday this month", "headline": "...", "detail": "..." },
+#   "user": { "name": "Alex", "profile_pic_url": null }
+# }

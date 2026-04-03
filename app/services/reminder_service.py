@@ -221,190 +221,344 @@ async def _get_active_challenge_id(db: AsyncSession, user_id: str) -> str:
 
 
 # ─── message pools ────────────────────────────────────────────────────────────
-# Tone: low pressure · quick action · progress identity · self-kindness · short & sweet
+# Research principles applied:
+#   • Identity-based framing (Atomic Habits) — "you're the kind of person who…"
+#   • Self-compassion > shame — shame causes disengagement; compassion causes re-try
+#   • Near-miss effect — show how close they are, not how far they fell
+#   • Endowed progress — lead with what they already did, not what they missed
+#   • Variable reward — large pools mean fresh messages every day
+#   • Loss aversion (gentle) — protect what you've already built
+#   • Implementation intention — name the specific tiny action
+#   • Fresh-start effect — any new day is a clean slate
+#   • Social proof — "consistent people / top performers" language
 # Title ≤ 50 chars · Body ≤ 100 chars
 
 # 9 PM — user hasn't logged any steps today
 _EVENING_POOL = [
-    ("Hey {name}, one quick tap 👣",
-     "Log it and call today done."),
-    ("{name}, no pressure — just log it 🌙",
-     "Even a slow day is worth logging."),
-    ("Small day? Still counts, {name} ✅",
-     "Tap and close today."),
-    ("{name}, you moved more than you think 🚶",
-     "Around the house counts too. Log it."),
-    ("Be kind to yourself, {name} 💛",
-     "Log what you have. Rest easy."),
-    ("Progress isn't always big, {name} 📊",
-     "A logged day keeps your story going."),
-    ("{name}, future you will thank today's you 🌱",
+    # Identity preservation
+    ("{name}, step people log on the quiet days too 👟",
+     "That's what separates them. Tap and close."),
+    # Tiny habit / BJ Fogg
+    ("One tap, {name}. That's the whole job. 👍",
+     "Log whatever you've got. No judgment."),
+    # Self-compassion
+    ("Be kind to yourself tonight, {name} 💛",
+     "Rest days count. Log it and close the day."),
+    # Progress not perfection
+    ("{name}, a logged day beats a skipped one 🎯",
+     "Consistency doesn't need perfection. Just log it."),
+    # Endowed progress / curiosity
+    ("{name}, what did your body do today? 🤔",
+     "The steps happened. Log them and find out."),
+    # Social proof
+    ("People who log daily are 5× more consistent 📊",
+     "{name}, log today's steps — even the small ones."),
+    # Near-miss / permission
+    ("{name}, you walked more than you think 🚶",
+     "Stairs, errands, the commute — it all adds up."),
+    # Fresh start / tonight
+    ("{name}, end today on your terms 🌙",
+     "Log it. Tomorrow starts clean."),
+    # Future-self framing
+    ("{name}, future-you reads this streak and smiles 🌱",
      "Even quiet days count. Log it."),
-    ("One tap, {name}. That's it. 👍",
-     "No judgment. Just log it."),
-    ("{name}, you're a step person 👟",
-     "Log today and keep that identity going."),
-    ("Tired? That's okay, {name} 😌",
-     "Rest days count too. Log it."),
-    ("{name}, consistency > perfection 🎯",
-     "No perfect day needed. Just a logged one."),
-    ("Still counts, {name} 💬",
-     "The walk, the stairs — it all counts."),
+    # Gentle urgency
+    ("Still a few hours left, {name} ⏳",
+     "A short walk and a quick log — day done."),
+    # Self-compassion
+    ("Tired days are real, {name} 😌",
+     "Log what you can. Every entry keeps the chain."),
+    # Identity vote (Atomic Habits)
+    ("{name}, every log is a vote for who you're becoming 🔥",
+     "Cast today's vote. One tap."),
 ]
 
 # 8 PM — user has an active streak but 0 steps today
 _STREAK_RISK_POOL = [
-    ("{name}, {streak} days — still yours 🔥",
-     "A short walk keeps it alive."),
-    ("Quick walk, {name}? {streak} days say yes 🚶",
-     "10 minutes is all it takes."),
-    ("{name}, your {streak}-day self shows up 💛",
-     "One small move and today joins the streak."),
-    ("Be kind, keep the streak, {name} 🛡️",
-     "Don't let tonight be the gap."),
-    ("Still time, {name} 🌙",
-     "A short walk and your streak is safe."),
-    ("{name}, {streak} days of showing up 🌱",
-     "Move a little, log it, sleep well."),
-    ("Progress, not perfection — {name} 💎",
-     "Add one more tonight."),
-    ("{name}, you started this streak for a reason 🎯",
-     "Walk, log, rest. Streak intact."),
-    ("Low energy day? Still go, {name} 😌",
-     "A slow walk still counts."),
+    # Loss aversion (gentle) + specific action
+    ("{name}, {streak} days — still yours to keep 🔥",
+     "A 10-minute walk right now saves every one of them."),
+    # Near-miss + tiny habit
+    ("10 minutes, {name}. That's all 🚶",
+     "Your {streak}-day streak is one short walk away from safety."),
+    # Identity preservation
+    ("{name}, your {streak}-day self doesn't quit tonight 💛",
+     "One move, logged. Streak safe."),
+    # Sunk cost + future reward
+    ("{streak} days is too valuable to let go, {name} 🛡️",
+     "Walk, log, protect. You've earned this."),
+    # Empathy + urgency
+    ("Still time tonight, {name} 🌙",
+     "Streak intact = one short walk away."),
+    # Progress identity
+    ("{name}, {streak} days of showing up says it all 🌱",
+     "Keep the story going before midnight."),
+    # Tiny habit — implementation intention
+    ("Walk to the end of the street, {name} 💎",
+     "That's all. Log it. {streak}-day streak saved."),
+    # Empathy + lowest bar possible
+    ("Low energy tonight? Valid, {name} 😌",
+     "A slow lap around the block still protects {streak} days."),
+    # Identity commitment
     ("{name}, the {streak}-day version of you moves 💪",
-     "Log before midnight and you're good."),
+     "Log before midnight and it's yours — forever."),
+    # Fresh start framing
+    ("{name}, tomorrow's streak day #{streak_plus_one} 🎯",
+     "But only if you log tonight. You've got this."),
 ]
 
 # Noon — challenge, 0 steps, no streak
 _NUDGE_COLD_POOL = [
-    ("{name}, small start in {challenge} 👟",
-     "Even 500 steps gets you on the board."),
-    ("Just show up, {name} 🌱",
-     "A short walk and you're in."),
-    ("{name}, any steps count in {challenge} 💛",
-     "Stairs, a walk, a lap — log it."),
-    ("Be kind to yourself, {name} 😌",
-     "A few steps in {challenge} still count."),
-    ("{name}, one small step 🎯",
-     "First log is the hardest. Then it flows."),
-    ("You belong in {challenge}, {name} 💬",
-     "No judgment. Just show up and log."),
+    # Tiny start / BJ Fogg
+    ("{name}, even 500 steps gets you on the board 🌱",
+     "The first log in {challenge} is the hardest. Then it flows."),
+    # Identity — belonging
+    ("You belong in {challenge}, {name} 💛",
+     "No judgment. Show up with any number."),
+    # Social proof
+    ("Top performers in {challenge} start small, {name} 📊",
+     "One short walk and you're one of them."),
+    # Self-compassion
+    ("Quiet day? That's okay, {name} 😌",
+     "Any steps in {challenge} still move you forward."),
+    # Near-miss trigger
+    ("{name}, you're one walk away from the board 🎯",
+     "Log anything in {challenge} and today's a win."),
+    # Implementation intention
+    ("Walk around the office once, {name} 🚶",
+     "Log it in {challenge}. Smallest start, real momentum."),
+    # Curiosity gap
+    ("{name}, what if today surprised you? 🤔",
+     "Open {challenge} and find out."),
+    # Fresh start
+    ("Today's a clean slate, {name} ✨",
+     "One step in {challenge} changes everything."),
 ]
 
 # Noon — challenge, 0 steps, streak > 0
 _NUDGE_STREAK_POOL = [
-    ("{name}, {streak} days — keep it gentle 💛",
-     "A small walk in {challenge} keeps the streak alive."),
-    ("Low effort, big reward, {name} 🌱",
-     "A short walk protects all {streak} days."),
-    ("{name}, be kind — then log it 😌",
-     "A slow walk in {challenge} still counts."),
-    ("Identity check, {name} 🎯",
-     "One step in {challenge} proves it."),
-    ("{streak} days says you show up, {name} 🛡️",
-     "Even a small effort keeps the story going."),
-    ("{name}, progress is progress 💎",
-     "Perfection not required. Just show up."),
+    # Loss aversion + compassion
+    ("{name}, protect {streak} days gently today 💛",
+     "A small walk in {challenge} keeps every day safe."),
+    # Tiny habit
+    ("Low effort, big reward today, {name} 🌱",
+     "A short walk shields {streak} days of work in {challenge}."),
+    # Empathy + action
+    ("{name}, be kind to yourself — then log it 😌",
+     "A gentle walk in {challenge} still counts."),
+    # Identity vote
+    ("{name}, every step is a vote for your {streak}-day self 🎯",
+     "Cast it in {challenge} before the day ends."),
+    # Near-miss
+    ("Don't let today be the gap, {name} 🛡️",
+     "{streak} days in {challenge} — a slow walk keeps them."),
+    # Progress
+    ("{streak} days banked, {name} — protect the investment 💎",
+     "Perfection not required in {challenge}. Just show up."),
+    # Social proof
+    ("Consistent {challenge} players protect their streaks, {name} 📈",
+     "{streak} days down. One walk to keep it going."),
+    # Implementation intention
+    ("Walk around your floor once, {name} 🚶",
+     "Log it in {challenge}. Streak saved. Done."),
 ]
 
-# Noon — challenge, logged but below today's target
-# {steps} = total challenge steps so far · {pct} = challenge completion %
+# Noon — logged but below today's target
+# vars: {name} {steps} {pct} {challenge} {remaining} {target}
 _NUDGE_BELOW_POOL = [
-    ("{name}, {pct}% through {challenge} 🌱",
-     "{steps:,} steps in so far. Keep it going."),
-    ("Good effort, {name} 💛",
-     "{pct}% done in {challenge}. Every step adds up."),
-    ("{name}, {pct}% and climbing 📊",
-     "{steps:,} total in {challenge}. You're on track."),
-    ("Looking good, {name} 😌",
-     "{steps:,} steps in {challenge} so far. Stay consistent."),
-    ("{name}, {pct}% — keep the pace 🎯",
-     "{steps:,} in {challenge}. Small steps, big results."),
-    ("You're doing it, {name} 🏅",
-     "{pct}% through {challenge}. {steps:,} steps and counting."),
+    # Endowed progress — lead with what they did
+    ("{name}, {pct}% there — you already started 🌱",
+     "{steps:,} steps in {challenge}. {remaining:,} more closes the day."),
+    # Near-miss — specific gap
+    ("{remaining:,} steps to goal, {name} 🎯",
+     "You're at {pct}% in {challenge}. That's about a 10-minute walk."),
+    # Progress identity
+    ("{name}, {pct}% and still moving in {challenge} 📊",
+     "{steps:,} logged. The gap is smaller than it looks."),
+    # Social proof
+    ("Good effort so far, {name} 💛",
+     "{pct}% in {challenge}. Finishers always close the gap."),
+    # Curiosity — leaderboard hook
+    ("{name}, a push now could move your rank 🤔",
+     "{steps:,} steps in {challenge}. {remaining:,} more and goal's hit."),
+    # Near-miss + achievable
+    ("{remaining:,} steps and today's complete, {name} ✅",
+     "You're {pct}% through {challenge}. The finish line is right there."),
+    # Identity — closers
+    ("You showed up — now close it, {name} 💪",
+     "{steps:,} in {challenge}. {remaining:,} steps to complete the day."),
+    # Reward framing — streak protection
+    ("{name}, goal hit = streak protected 🔥",
+     "{remaining:,} steps left in {challenge}. You can do this."),
 ]
 
 
 # 7:30 AM — user has active habit challenge but nothing logged yet today
 _HABIT_MORNING_POOL = [
-    ("{name}, your habits are waiting 🌅",
-     "Start with one. The rest follow."),
-    ("Morning, {name} — habit time 🌿",
-     "Small steps today build big change."),
-    ("{name}, fresh day, fresh habits ✨",
-     "Your streak is counting on you."),
-    ("Rise and habit, {name} 🌞",
-     "A quick tap and today's yours."),
-    ("{name}, the best time is now 🎯",
-     "Open your habits and check one off."),
-    ("Good morning, {name} 👋",
-     "Your daily habits are ready for you."),
+    # Identity / Atomic Habits
+    ("{name}, small habits compound into big change 🌅",
+     "Start with one. The rest follow naturally."),
+    # Implementation intention
+    ("Morning, {name} — which habit first? 🌿",
+     "Pick one. Start it. Day momentum begins."),
+    # Social proof
+    ("{name}, people who check habits before 9 AM stay 2× consistent 📊",
+     "Tap in. Beat the morning."),
+    # Curiosity / perfect day teaser
+    ("{name}, today could be a perfect day 🌟",
+     "One habit logged and you're already ahead."),
+    # Tiny habit / lowest bar
+    ("Rise and check, {name} 🌞",
+     "Easiest win of the day is one tap away."),
+    # Streak protection framing
+    ("Good morning, {name} — your streak is watching 👋",
+     "Log one habit before the day gets away."),
+    # Identity
+    ("{name}, habit people check in the morning 🎯",
+     "You're one tap away from proving it again today."),
+    # Fresh start
+    ("Fresh day, fresh win, {name} ✨",
+     "Tap one habit. Carry that feeling all day."),
 ]
 
 # 8:30 PM — user has ≥1 incomplete habit today
+# vars: {name} {done} {remaining} {total}
 _HABIT_EVENING_POOL = [
-    ("{name}, a few habits still to go 🌙",
-     "Quick check-in before the day ends."),
-    ("Almost there, {name} ✅",
-     "Finish your habits before midnight."),
-    ("{name}, your habits await 🌿",
-     "A few minutes and you're done for today."),
-    ("End the day strong, {name} 💪",
-     "Check off your remaining habits."),
-    ("{name}, don't break the chain 🔥",
-     "Complete today's habits to keep your streak."),
-    ("Night check-in, {name} 🌛",
-     "Your habits — quick and done."),
+    # Endowed progress — lead with what they did
+    ("{name}, {done} habit{ds} done — {remaining} left 🌙",
+     "You've already done the hard part. Finish strong."),
+    # Near-miss — almost perfect
+    ("Almost a perfect day, {name} ✨",
+     "{done} of {total} habits done. {remaining} more and tonight's complete."),
+    # Compassion + action
+    ("{name}, end the day proud 🌿",
+     "{remaining} habit{rs} left. A few minutes and you're done."),
+    # Curiosity / perfect day hook
+    ("{name}, what if tonight's a perfect day? 🌟",
+     "Finish {remaining} habit{rs} and find out."),
+    # Identity
+    ("Habit people finish, {name} 🔥",
+     "{done} down, {remaining} to go. Close it strong."),
+    # Streak protection
+    ("{name}, tonight's habits protect tomorrow's streak 🛡️",
+     "{remaining} left. Quick check-in before midnight."),
+    # Tiny habit
+    ("Two minutes, {name} 🌙",
+     "Log {remaining} remaining habit{rs}. Close the day clean."),
+    # Progress not perfection
+    ("{name}, done beats perfect 🎯",
+     "Finish what you can. {done} of {total} already done."),
 ]
 
 # Real-time — all habits completed for the day
 _HABIT_PERFECT_DAY_POOL = [
+    # Big celebration + identity
     ("Perfect day, {name}! 🎉",
-     "Every habit done. That's a big deal."),
-    ("{name}, you crushed it today! 🏆",
-     "All habits complete. Streak growing!"),
-    ("100% today, {name} 🌟",
-     "Perfect day logged. Keep it going!"),
+     "Every habit done. That's exactly who you're becoming."),
+    # Identity + streak
+    ("{name}, 100% — that's your standard now 🏆",
+     "A perfect day. Your streak just got stronger."),
+    # Social proof + rarity
+    ("You hit 100% today, {name} 🌟",
+     "Most people don't. You did. Streak growing."),
+    # Anticipation / investment
     ("All done, {name}! ✨",
-     "Every habit checked off. You showed up."),
+     "Every habit checked. See you tomorrow for another."),
+    # Atomic Habits identity
+    ("{name}, this is what commitment looks like 💎",
+     "Perfect day. The habit is becoming automatic."),
+    # Near-future milestone teaser
+    ("Flawless, {name}! 🔥",
+     "All habits done. One more perfect day builds the streak."),
 ]
 
 # Real-time — habit streak milestones (3/7/14/21/30 days)
 _HABIT_MILESTONE_POOL = [
-    ("{name}, {streak} days straight! 🔥",
-     "Your habit streak is on fire. Keep it up!"),
-    ("{streak}-day streak, {name}! 🎯",
-     "Consistency is your superpower."),
+    # Science hook — builds belief
+    ("{name}, {streak} days — habits start becoming automatic 🔥",
+     "Research says this is where it sticks. Keep the chain."),
+    # Identity
+    ("{streak}-day streak, {name} 🎯",
+     "Consistency is becoming your personality. Don't stop."),
+    # Progress + what's next
     ("{name}, {streak} days of showing up 🌱",
-     "You're building something real."),
-    ("Milestone: {streak} days, {name} 🏅",
-     "That's real commitment. Be proud."),
+     "You're building something that lasts. What does {streak} more look like?"),
+    # Celebration + curiosity
+    ("Milestone: {streak} days, {name}! 🏅",
+     "Real commitment. The next milestone is closer than you think."),
+    # Near-future teaser
+    ("{name}, {streak} days straight 💪",
+     "Habits this consistent become who you are. Keep it going."),
 ]
 
 # Sunday 8 PM — weekly progress summary
 _WEEKLY_SUMMARY_POOL = [
-    ("{name}, your week in review 📊",
-     "{steps:,} steps · {habit_pct}% habits done. Nice week!"),
-    ("Week done, {name}! 🎯",
-     "{steps:,} steps and {habit_pct}% of habits checked off."),
-    ("{name}, here's your weekly wrap 🌟",
-     "Steps: {steps:,} · Habits: {habit_pct}% complete."),
+    # Endowed progress framing
+    ("{name}, your week in numbers 📊",
+     "{steps:,} steps · {habit_pct}% habits done. That's a real week."),
+    # Identity reinforcement
+    ("Week wrapped, {name} — you showed up 🎯",
+     "{steps:,} steps and {habit_pct}% habits. That's what consistency looks like."),
+    # Anticipation hook for next week
+    ("{name}, week in review 🌟",
+     "{steps:,} steps · {habit_pct}% habits. Next week: beat this."),
+    # Self-compassion (good for low-score weeks)
+    ("{name}, every week teaches you something 💛",
+     "{steps:,} steps · {habit_pct}% habits done. Fresh week starts tomorrow."),
+    # Progress compounds
+    ("{name}, here's what this week built 🌱",
+     "{steps:,} steps · {habit_pct}% habits. Small weeks compound into big months."),
 ]
 
-# Daily rank change notifications
+# Rank went up
 _RANK_UP_POOL = [
-    ("{name}, up to rank #{rank}! 📈",
-     "Climbed {moved} spot{s}. Keep the momentum!"),
-    ("Rank #{rank} — nice move, {name} 🚀",
-     "You climbed {moved} spot{s} today."),
+    # Celebration + momentum
+    ("{name}, up to rank #{rank}! 🚀",
+     "Climbed {moved} spot{s}. Consistency got you here — keep it going."),
+    # Identity + near-future milestone
+    ("Rank #{rank} — you earned it, {name} 📈",
+     "Up {moved} spot{s}. The next rank is within reach."),
+    # Curiosity + next target
+    ("{name}, rank #{rank} now 🏅",
+     "+{moved} spot{s} today. Stay consistent and it keeps moving."),
+    # Social proof
+    ("Moving up the board, {name} 💪",
+     "Rank #{rank} — {moved} spot{s} climbed. This is what daily effort looks like."),
 ]
 
+# Rank went down — most critical pool, must never shame or demotivate
 _RANK_DOWN_POOL = [
-    ("{name}, dropped to rank #{rank} 📉",
-     "Down {moved} spot{s}. Today's a good day to push."),
-    ("Rank #{rank} now, {name} — time to climb 💪",
-     "Slipped {moved} spot{s}. Go get it back."),
+    # Reframe as temporary + specific path forward
+    ("{name}, rank #{rank} right now 💛",
+     "Down {moved} spot{s}. One strong day is all it takes to climb back."),
+    # Self-compassion + "this happens"
+    ("Rankings shift daily, {name} 💎",
+     "You're at #{rank} now. Consistent days always bring you back up."),
+    # Near-miss — frame the gap, not the drop
+    ("{name}, rank #{rank} — and climbing back is simple 🎯",
+     "{moved} spot{s} down. Walk your target today and watch it flip."),
+    # Identity protection — consistent people recover
+    ("Temporary dip, {name} 🌱",
+     "Rank #{rank} right now. The players who stay consistent always rise."),
+]
+
+# Habit 7-day cycle completion
+_HABIT_CYCLE_POOL = [
+    # Full celebration
+    ("7-day cycle complete, {name}! 🎉",
+     "{habit_pct}% habits done · {perfect_days} perfect day{ps}. That's a real win."),
+    # Identity + stats
+    ("{name}, your habit week is wrapped 🏁",
+     "{habit_pct}% across 7 days · {perfect_days} perfect day{ps}. You're building the person you want to be."),
+    # Progress not perfection (works for any %)
+    ("Cycle done, {name} 💪",
+     "{habit_pct}% — {done_days} of {possible_days} habits logged · {perfect_days} perfect day{ps}. Every cycle you level up."),
+    # Anticipation hook for next cycle
+    ("{name}, 7 days in the books 📅",
+     "{habit_pct}% this cycle · {perfect_days} perfect day{ps}. Next cycle: same habits, better score."),
+    # Self-compassion (good for tough weeks)
+    ("{name}, you showed up for 7 days 💛",
+     "{done_days} habits logged out of {possible_days} · {perfect_days} perfect day{ps}. That matters."),
 ]
 
 
@@ -486,8 +640,8 @@ async def send_streak_at_risk(db: AsyncSession):
             challenge_id = await _get_active_challenge_id(db, user.id)
             url = f"/socialapp/challanges/{challenge_id}/steps"
             sent = await _push_all(db, subs, {
-                "title": title_tpl.format(name=name, streak=streak),
-                "body":  body_tpl.format(name=name, streak=streak),
+                "title": title_tpl.format(name=name, streak=streak, streak_plus_one=streak + 1),
+                "body":  body_tpl.format(name=name, streak=streak, streak_plus_one=streak + 1),
                 "url":   url,
             })
             if sent:
@@ -600,9 +754,10 @@ async def send_challenge_step_nudges(db: AsyncSession):
             body  = body.format(name=name, challenge=challenge)
 
         elif steps_today < target:
+            remaining = max(target - steps_today, 0)
             title, body = random.choice(_NUDGE_BELOW_POOL)
-            title = title.format(name=name, steps=total_steps, pct=pct, challenge=challenge)
-            body  = body.format(name=name, steps=total_steps, pct=pct, challenge=challenge)
+            title = title.format(name=name, steps=total_steps, pct=pct, challenge=challenge, remaining=remaining, target=target)
+            body  = body.format(name=name, steps=total_steps, pct=pct, challenge=challenge, remaining=remaining, target=target)
 
         try:
             if not await _try_claim_push_slot(db, row["user_id"]):
@@ -711,11 +866,16 @@ async def send_habit_evening_nudge(db: AsyncSession):
             if not await _try_claim_push_slot(db, row["user_id"]):
                 continue
             name = (row["name"] or "there").split()[0]
+            done_count = int(row["done_today"])
+            total_count = int(row["total_habits"])
+            remaining_count = total_count - done_count
+            ds = "" if done_count == 1 else "s"       # "habit" vs "habits"
+            rs = "" if remaining_count == 1 else "s"
             title_tpl, body_tpl = random.choice(_HABIT_EVENING_POOL)
             subs = await _get_subscriptions(db, row["user_id"])
             sent = await _push_all(db, subs, {
-                "title": title_tpl.format(name=name),
-                "body":  body_tpl.format(name=name),
+                "title": title_tpl.format(name=name, done=done_count, remaining=remaining_count, total=total_count, ds=ds, rs=rs),
+                "body":  body_tpl.format(name=name, done=done_count, remaining=remaining_count, total=total_count, ds=ds, rs=rs),
                 "url":   "/socialapp/habits",
             })
             if sent:
@@ -910,6 +1070,113 @@ async def send_rank_change_notifications(db: AsyncSession):
             logger.error(f"Rank change error for challenge {ch['id']}: {e}")
 
     logger.info(f"Rank change notifications: notified {notified} users")
+    return notified
+
+
+# ─── 10. Habit cycle completion summary (daily, fires when ends_at = today) ───
+
+async def send_habit_cycle_summary(db: AsyncSession):
+    """
+    Runs daily at 21:00 IST.
+    Finds every active habit_challenge whose ends_at = today, computes 7-day
+    completion stats, sends a celebratory push, then marks the challenge completed.
+    """
+    logger.info("JOB: habit cycle summary")
+    today = date.today()
+    notified = 0
+
+    # All active challenges that end today
+    ending = await db.execute(text("""
+        SELECT hc.id AS challenge_id, hc.user_id, hc.started_at,
+               u.name AS user_name
+        FROM habit_challenges hc
+        JOIN users u ON u.id = hc.user_id
+        WHERE hc.ends_at = :today AND hc.status = 'active'
+    """), {"today": today})
+    rows = ending.mappings().all()
+
+    if not rows:
+        logger.info("Habit cycle summary: no challenges ending today")
+        return 0
+
+    for row in rows:
+        uid = str(row["user_id"])
+        challenge_id = int(row["challenge_id"])
+        started_at = row["started_at"]
+        try:
+            # ── 7-day completion stats ────────────────────────────────────
+            stats_row = await db.execute(text("""
+                SELECT
+                    COUNT(DISTINCT hcm.id)                                         AS total_habits,
+                    COALESCE(SUM(CASE WHEN dl.completed THEN 1 ELSE 0 END), 0)     AS done_count
+                FROM habit_commitments hcm
+                LEFT JOIN daily_logs dl
+                    ON  dl.commitment_id = hcm.id
+                    AND dl.logged_date   >= :start
+                    AND dl.logged_date   <= :today
+                WHERE hcm.challenge_id = :cid
+            """), {"cid": challenge_id, "start": started_at, "today": today})
+            s = stats_row.mappings().first() or {}
+            total_habits = int(s.get("total_habits") or 0)
+            done_count   = int(s.get("done_count")   or 0)
+            possible     = total_habits * 7
+            habit_pct    = round(done_count / possible * 100) if possible else 0
+
+            # Perfect days: days where every habit was completed
+            perfect_row = await db.execute(text("""
+                SELECT COUNT(*) AS perfect_days
+                FROM (
+                    SELECT dl.logged_date
+                    FROM habit_commitments hcm
+                    JOIN daily_logs dl
+                        ON  dl.commitment_id = hcm.id
+                        AND dl.logged_date   >= :start
+                        AND dl.logged_date   <= :today
+                        AND dl.completed
+                    WHERE hcm.challenge_id = :cid
+                    GROUP BY dl.logged_date
+                    HAVING COUNT(*) = :total_habits
+                ) t
+            """), {"cid": challenge_id, "start": started_at, "today": today,
+                   "total_habits": total_habits})
+            perfect_days = int(perfect_row.scalar() or 0)
+
+            # ── Push notification ─────────────────────────────────────────
+            if not await _try_claim_push_slot(db, uid):
+                logger.debug(f"Cycle summary skipped (cap): user {uid}")
+            else:
+                name = (row["user_name"] or "there").split()[0]
+                ps = "" if perfect_days == 1 else "s"
+                title_tpl, body_tpl = random.choice(_HABIT_CYCLE_POOL)
+                subs = await _get_subscriptions(db, uid)
+                sent = await _push_all(db, subs, {
+                    "title": title_tpl.format(name=name),
+                    "body":  body_tpl.format(
+                        name=name,
+                        habit_pct=habit_pct,
+                        perfect_days=perfect_days,
+                        ps=ps,
+                        done_days=done_count,
+                        possible_days=possible,
+                    ),
+                    "url": "/socialapp/habits",
+                })
+                if sent:
+                    notified += 1
+
+            # ── Mark challenge completed ──────────────────────────────────
+            await db.execute(text("""
+                UPDATE habit_challenges
+                SET status = 'completed'
+                WHERE id = :cid
+            """), {"cid": challenge_id})
+            await db.commit()
+
+        except Exception as e:
+            await db.rollback()
+            logger.error(f"Habit cycle summary error for challenge {challenge_id}: {e}")
+
+    logger.info(f"Habit cycle summary: notified {notified} users, processed {len(rows)} challenges")
     return notified
 
 

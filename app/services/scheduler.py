@@ -12,6 +12,7 @@ from app.services.reminder_service import (
     send_habit_evening_nudge,
     send_weekly_summary,
     send_rank_change_notifications,
+    send_habit_cycle_summary,
 )
 import logging
 
@@ -295,7 +296,24 @@ scheduler.add_job(
 )
 logger.info("Job configured: weekly summary @ 20:00 IST every Sunday")
 
-# 8. Rank change notifications — 21:30 IST (after step reminders, using day's snapshot)
+# 8. Habit cycle completion summary — 21:00 IST (challenges ending today)
+async def habit_cycle_summary_job():
+    async with AsyncSessionLocal() as db:
+        try:
+            await send_habit_cycle_summary(db)
+        except Exception as e:
+            logger.error(f"Error in habit cycle summary job: {e}", exc_info=True)
+
+
+scheduler.add_job(
+    habit_cycle_summary_job,
+    CronTrigger(hour=21, minute=0, timezone="Asia/Kolkata"),
+    id='habit_cycle_summary',
+    replace_existing=True,
+)
+logger.info("Job configured: habit cycle summary @ 21:00 IST daily")
+
+# 9. Rank change notifications — 21:30 IST (after step reminders, using day's snapshot)
 # scheduler.add_job(
 #     rank_change_job,
 #     CronTrigger(hour=21, minute=30, timezone="Asia/Kolkata"),

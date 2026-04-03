@@ -540,3 +540,34 @@ class DailyPushCount(Base):
     user_id:   Mapped[str]  = mapped_column(UUID(as_uuid=True), ForeignKey("users.id", ondelete="CASCADE"), primary_key=True)
     push_date: Mapped[date] = mapped_column(Date, nullable=False, primary_key=True)
     count:     Mapped[int]  = mapped_column(Integer, nullable=False, default=0)
+
+
+class AiInsight(Base):
+    """
+    One AI-generated insight per user per day.
+    Cached so the home screen is instant on repeat visits and we don't
+    burn API tokens on every page load.
+
+    segments / detail are JSONB arrays of rich-text spans:
+      [{"text": "8,240 steps", "style": "stat", "color": "purple"}, ...]
+
+    Styles the frontend should render:
+      "normal"    — body text, no decoration
+      "stat"      — bold number, accent color
+      "highlight" — coloured pill / chip background
+      "milestone" — bold + slightly larger, gold/orange
+    """
+    __tablename__ = "ai_insights"
+
+    id:           Mapped[int]      = mapped_column(Integer, primary_key=True)
+    user_id:      Mapped[str]      = mapped_column(UUID(as_uuid=True), ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
+    insight_date: Mapped[date]     = mapped_column(Date, nullable=False)
+    provider:     Mapped[str]      = mapped_column(Text, nullable=False)
+    badge:        Mapped[str]      = mapped_column(Text, nullable=False)
+    segments:     Mapped[list]     = mapped_column(JSONB, nullable=False)   # headline rich spans
+    detail:       Mapped[list]     = mapped_column(JSONB, nullable=False)   # detail rich spans
+    hook:         Mapped[str]      = mapped_column(Text, nullable=False)    # "come back tomorrow" line
+    raw_stats:    Mapped[dict]     = mapped_column(JSONB, nullable=False)
+    created_at:   Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+    __table_args__ = (UniqueConstraint("user_id", "insight_date", name="uq_ai_insight_user_date"),)
