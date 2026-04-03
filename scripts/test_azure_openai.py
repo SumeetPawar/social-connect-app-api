@@ -2,9 +2,10 @@ import asyncio
 import os
 from openai import AsyncAzureOpenAI
 
+# REMOVED_SECRET
 async def main():
     endpoint = "https://sumee-mnj0fhty-eastus2.cognitiveservices.azure.com/"
-    api_key = "REMOVED_SECRET"
+    api_key = ""
     api_version = "2025-04-01-preview"
     deployment = "gpt-5.3-chat"
 
