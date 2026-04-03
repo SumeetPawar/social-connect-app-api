@@ -2,7 +2,6 @@ import asyncio
 import os
 from openai import AsyncAzureOpenAI
 
-# REMOVED_SECRET
 async def main():
 
     endpoint = "https://sumee-mnj0fhty-eastus2.cognitiveservices.azure.com/"
