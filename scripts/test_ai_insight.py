@@ -15,6 +15,8 @@ import sys
 from pathlib import Path
 
 # Make sure project root is on the path so app.* imports work
+# 4h6PYHUxQeAqFHmCG0DGdxLt1nWyweQDFuXRytL5jPIFd4hoP3sJQQJ99CDACHYHv6XJ3w3AAAAACOG7hB7
+
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 # ── ANSI terminal rendering ───────────────────────────────────────────────────
