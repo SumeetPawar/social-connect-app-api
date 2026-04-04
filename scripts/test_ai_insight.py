@@ -16,7 +16,10 @@ from pathlib import Path
 
 # Make sure project root is on the path so app.* imports work
 # REMOVED_SECRET
-
+# "https://sumee-mnj0fhty-eastus2.cognitiveservices.azure.com/"
+# "REMOVED_SECRET"
+# "2025-04-01-preview"
+# "gpt-5.3-chat"
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 # ── ANSI terminal rendering ───────────────────────────────────────────────────
