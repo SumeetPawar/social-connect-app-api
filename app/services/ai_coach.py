@@ -109,19 +109,24 @@ async def _collect_coach_stats(db: AsyncSession, user_id: str) -> dict:
 
     # Days target was hit (30-day)
     target_row = await db.execute(text("""
+        WITH active_target AS (
+            SELECT COALESCE(cp.selected_daily_target, 8000) AS daily_target
+            FROM challenge_participants cp
+            JOIN challenges c ON c.id = cp.challenge_id
+            WHERE cp.user_id = :uid AND c.status = 'active' AND cp.left_at IS NULL
+            ORDER BY c.end_date DESC
+            LIMIT 1
+        )
         SELECT
-            COALESCE(cp.selected_daily_target, 8000) AS daily_target,
+            at.daily_target,
             COUNT(ds.day) FILTER (
-                WHERE ds.steps >= COALESCE(cp.selected_daily_target, 8000)
+                WHERE ds.steps >= at.daily_target
             ) AS days_target_hit
-        FROM challenge_participants cp
-        JOIN challenges c ON c.id = cp.challenge_id
+        FROM active_target at
         LEFT JOIN daily_steps ds
-            ON ds.user_id = cp.user_id
+            ON ds.user_id = :uid
             AND ds.day >= :start AND ds.day <= :today
-        WHERE cp.user_id = :uid AND c.status = 'active' AND cp.left_at IS NULL
-        ORDER BY c.end_date DESC
-        LIMIT 1
+        GROUP BY at.daily_target
     """), {"uid": user_id, "start": start_30, "today": today})
     t = target_row.mappings().first() or {}
     daily_target   = int(t.get("daily_target") or 8000)

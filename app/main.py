@@ -56,8 +56,11 @@ async def lifespan(app: FastAPI):
             from app.services.reminder_service import send_service_started_notification
             from app.db.session import AsyncSessionLocal
             async def _notify_startup():
-                async with AsyncSessionLocal() as db:
-                    await send_service_started_notification(db)
+                try:
+                    async with AsyncSessionLocal() as db:
+                        await send_service_started_notification(db)
+                except Exception as e:
+                    logger.warning(f"Startup notification skipped (DB may not be reachable): {e}")
             asyncio.create_task(_notify_startup())
             logger.info("Triggered startup notification to test user")
         except Exception as e:
