@@ -59,7 +59,13 @@ def _get_anthropic():
 def _get_azure():
     global _azure_client
     if _azure_client is None:
-        from openai import AsyncAzureOpenAI
+        try:
+            from openai import AsyncAzureOpenAI
+        except ModuleNotFoundError:
+            raise ModuleNotFoundError(
+                "The 'openai' package is not installed in the active Python environment. "
+                "Run: .venv311\\Scripts\\python.exe -m pip install openai"
+            )
         _azure_client = AsyncAzureOpenAI(
             azure_endpoint=settings.AZURE_OPENAI_ENDPOINT,
             api_key=settings.AZURE_OPENAI_API_KEY,
@@ -93,13 +99,15 @@ async def get_home_insight(db: AsyncSession, user_id: str) -> dict | None:
     return None
 
 
-async def generate_nightly_insights(db: AsyncSession) -> int:
+async def generate_nightly_insights(db: AsyncSession, user_id: str | None = None) -> int:
     """
     Nightly scheduled job — runs after midnight (00:30 IST).
     Generates a daily insight for every user who has push subscriptions or
     active habit/step data. Stores insight_date = today (the new day),
     stats collected from yesterday.
     Skips users who already have a row for today (safe to re-run).
+
+    Pass user_id to generate for a single specific user (useful for testing).
     Returns count of insights generated.
     """
     from sqlalchemy import text as _text
@@ -107,35 +115,41 @@ async def generate_nightly_insights(db: AsyncSession) -> int:
     provider = settings.AI_PROVIDER.lower()
     generated = 0
 
-    # All distinct users who have any recent activity or subscriptions
-    users_row = await db.execute(_text("""
-        SELECT DISTINCT u.id
-        FROM users u
-        WHERE EXISTS (
-            SELECT 1 FROM daily_steps ds
-            WHERE ds.user_id = u.id AND ds.day >= :since
-        ) OR EXISTS (
-            SELECT 1 FROM habit_challenges hc
-            WHERE hc.user_id = u.id AND hc.status = 'active'
-        ) OR EXISTS (
-            SELECT 1 FROM push_subscriptions ps
-            WHERE ps.user_id = u.id
-        )
-    """), {"since": today - timedelta(days=14)})
-    user_ids = [str(r[0]) for r in users_row.all()]
-
-    logger.info(f"Nightly insight job: generating for {len(user_ids)} users")
+    if user_id:
+        # Single-user mode
+        user_ids = [str(user_id)]
+        logger.info(f"Nightly insight job: single-user mode for {user_id}")
+    else:
+        # All distinct users who have any recent activity or subscriptions
+        users_row = await db.execute(_text("""
+            SELECT DISTINCT u.id
+            FROM users u
+            WHERE EXISTS (
+                SELECT 1 FROM daily_steps ds
+                WHERE ds.user_id = u.id AND ds.day >= :since
+            ) OR EXISTS (
+                SELECT 1 FROM habit_challenges hc
+                WHERE hc.user_id = u.id AND hc.status = 'active'
+            ) OR EXISTS (
+                SELECT 1 FROM push_subscriptions ps
+                WHERE ps.user_id = u.id
+            )
+        """), {"since": today - timedelta(days=14)})
+        user_ids = [str(r[0]) for r in users_row.all()]
+        logger.info(f"Nightly insight job: generating for {len(user_ids)} users")
 
     for uid in user_ids:
         try:
-            # Skip if already generated today
+            # Skip if already generated today — use --force to regenerate
             existing = await db.execute(
                 select(AiInsight).where(
                     AiInsight.user_id == uid,
                     AiInsight.insight_date == today,
                 )
             )
-            if existing.scalar_one_or_none():
+            existing_row = existing.scalar_one_or_none()
+            if existing_row:
+                logger.info(f"Insight already exists for user {uid} today — skipping (delete the row to regenerate)")
                 continue
 
             stats = await _collect_stats(db, uid)
@@ -313,6 +327,11 @@ Return ONLY a valid JSON object (no markdown, no code fences) with these four ke
     "highlight" — a label or achievement (colored chip/pill background)
     "milestone" — a streak or rank worth celebrating (bold, larger, gold)
 
+  SPACING RULE: spans are concatenated directly by the frontend.
+  Every "normal" span that sits between two styled spans MUST start and end
+  with a space so words don't run together.
+  Example: [{"text":"Rank ","style":"stat",...},{"text":" this week with ","style":"normal",...},{"text":"8,000","style":"stat",...}]
+
   Colors (use only these, or null for normal):
     "purple"  — steps, activity
     "green"   — completed habits, streaks
@@ -353,7 +372,7 @@ def _build_user_message(stats: dict) -> str:
 
 
 def _validate_spans(spans: list) -> list:
-    """Ensure every span has the required keys; strip unknown ones."""
+    """Ensure every span has the required keys, strip unknown ones, and fix spacing."""
     valid_styles = {"normal", "stat", "highlight", "milestone"}
     valid_colors = {"purple", "green", "orange", "rose", "teal", None}
     result = []
@@ -365,6 +384,19 @@ def _validate_spans(spans: list) -> list:
             "style": span.get("style", "normal") if span.get("style") in valid_styles else "normal",
             "color": span.get("color") if span.get("color") in valid_colors else None,
         })
+
+    # Ensure a space exists at every boundary between adjacent spans so the
+    # frontend can concatenate them without words running together.
+    for i in range(1, len(result)):
+        prev, curr = result[i - 1], result[i]
+        if curr["text"] and not prev["text"].endswith(" ") and not curr["text"].startswith(" "):
+            # Prefer adding the space to the leading edge of the current span
+            # so styled spans (stat/highlight/milestone) stay visually clean.
+            if curr["style"] == "normal":
+                curr["text"] = " " + curr["text"]
+            else:
+                prev["text"] = prev["text"] + " "
+
     return result or [{"text": "", "style": "normal", "color": None}]
 
 
@@ -427,7 +459,7 @@ async def _ask_azure(stats: dict) -> dict:
         return _parse_response(raw, stats)
 
     except Exception as e:
-        logger.error(f"Azure insight error: {e}")
+        logger.error(f"Azure insight error: {e}", exc_info=True)
         return _fallback(stats)
 
 

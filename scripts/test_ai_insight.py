@@ -15,6 +15,7 @@ import sys
 from pathlib import Path
 
 # Make sure project root is on the path so app.* imports work
+# Azure OpenAI config is read from .env / environment variables (see app/core/config.py)
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 # ── ANSI terminal rendering ───────────────────────────────────────────────────
