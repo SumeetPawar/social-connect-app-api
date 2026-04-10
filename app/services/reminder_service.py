@@ -419,6 +419,11 @@ _HABIT_MORNING_POOL = [
     # Fresh start
     ("Fresh day, fresh win, {name} ✨",
      "Tap one habit. Carry that feeling all day."),
+    # Seed-to-tree
+    ("{name}, every habit logged grows your tree 🌱",
+     "Water it this morning. One tap is all it needs."),
+    ("Your tree is waiting, {name} 🌿",
+     "Log a habit and watch it grow. Day starts now."),
 ]
 
 # 8:30 PM — user has ≥1 incomplete habit today
@@ -448,6 +453,9 @@ _HABIT_EVENING_POOL = [
     # Progress not perfection
     ("{name}, done beats perfect 🎯",
      "Finish what you can. {done} of {total} already done."),
+    # Seed-to-tree
+    ("{name}, your tree needs {remaining} more drop{rs} tonight 🌿",
+     "Log the last habit{rs}. Don't leave it thirsty."),
 ]
 
 # Real-time — all habits completed for the day
@@ -470,6 +478,9 @@ _HABIT_PERFECT_DAY_POOL = [
     # Near-future milestone teaser
     ("Flawless, {name}! 🔥",
      "All habits done. One more perfect day builds the streak."),
+    # Seed-to-tree
+    ("{name}, your tree grew today 🌳",
+     "Every habit done. That's what a perfect day looks like."),
 ]
 
 # Real-time — habit streak milestones (3/7/14/21/30 days)
@@ -489,6 +500,9 @@ _HABIT_MILESTONE_POOL = [
     # Near-future teaser
     ("{name}, {streak} days straight 💪",
      "Habits this consistent become who you are. Keep it going."),
+    # Seed-to-tree — streak as tree growth
+    ("{name}, {streak} days — your tree is growing 🌳",
+     "Roots go deeper every day you show up. Keep watering it."),
 ]
 
 # Sunday 8 PM — weekly progress summary
@@ -559,6 +573,9 @@ _HABIT_CYCLE_POOL = [
     # Self-compassion (good for tough weeks)
     ("{name}, you showed up for 7 days 💛",
      "{done_days} habits logged out of {possible_days} · {perfect_days} perfect day{ps}. That matters."),
+    # Seed-to-tree — cycle as harvest
+    ("{name}, 7 days of watering your tree 🌳",
+     "{habit_pct}% habits done · {perfect_days} perfect day{ps}. The roots are stronger than last cycle."),
 ]
 
 

@@ -140,20 +140,41 @@ async def generate_nightly_insights(db: AsyncSession, user_id: str | None = None
 
     for uid in user_ids:
         try:
-            # Skip if already generated today — use --force to regenerate
+            # Skip if already generated today
             existing = await db.execute(
                 select(AiInsight).where(
                     AiInsight.user_id == uid,
                     AiInsight.insight_date == today,
                 )
             )
-            existing_row = existing.scalar_one_or_none()
-            if existing_row:
-                logger.info(f"Insight already exists for user {uid} today — skipping (delete the row to regenerate)")
+            if existing.scalar_one_or_none():
+                logger.info(f"[insight] {uid}: already exists today — skipping")
                 continue
 
-            stats = await _collect_stats(db, uid)
-            insight = await _call_provider(stats, provider)
+            # Collect stats
+            try:
+                stats = await _collect_stats(db, uid)
+            except Exception as e:
+                logger.error(f"[insight] {uid}: _collect_stats failed — {e}", exc_info=True)
+                await db.rollback()
+                continue
+
+            # Skip users with no meaningful data — saves AI quota, avoids junk insight
+            has_data = (
+                stats.get("steps_yesterday", 0) > 0
+                or stats.get("steps_week", 0) > 0
+                or stats.get("habits_total", 0) > 0
+            )
+            if not has_data:
+                logger.info(f"[insight] {uid}: no activity data — skipping")
+                continue
+
+            # Call AI (falls back internally on provider errors)
+            try:
+                insight = await _call_provider(stats, provider)
+            except Exception as e:
+                logger.error(f"[insight] {uid}: _call_provider failed — {e}", exc_info=True)
+                insight = _fallback(stats)
 
             db.add(AiInsight(
                 user_id=uid,
@@ -167,10 +188,11 @@ async def generate_nightly_insights(db: AsyncSession, user_id: str | None = None
             ))
             await db.commit()
             generated += 1
-            logger.debug(f"Insight generated for user {uid}")
+            logger.info(f"[insight] {uid}: generated ok (provider={provider})")
+
         except Exception as e:
             await db.rollback()
-            logger.error(f"Nightly insight error for user {uid}: {e}")
+            logger.error(f"[insight] {uid}: unexpected error — {e}", exc_info=True)
 
     logger.info(f"Nightly insight job: generated {generated} new insights")
     return generated
@@ -309,6 +331,11 @@ You are the motivational voice inside a fitness app — sharp, warm, and honest.
 Your job: turn raw 7-day stats into a daily insight that makes the user feel seen
 and genuinely excited to open the app again tomorrow.
 
+IMPORTANT: The user message will tell you whether this user tracks steps, habits, or both.
+Only reference data that exists for them. Never mention steps for a habits-only user,
+never mention habits for a steps-only user. The insight should feel like it was written
+specifically for their situation, not a generic template.
+
 Return ONLY a valid JSON object (no markdown, no code fences) with these four keys:
 
 "badge"
@@ -364,7 +391,26 @@ Return ONLY a valid JSON object (no markdown, no code fences) with these four ke
 
 
 def _build_user_message(stats: dict) -> str:
+    has_steps  = stats.get("steps_week", 0) > 0 or stats.get("steps_yesterday", 0) > 0
+    has_habits = stats.get("habits_total", 0) > 0
+
+    if has_steps and has_habits:
+        context = "This user tracks BOTH steps and habits."
+    elif has_steps:
+        context = (
+            "This user tracks STEPS ONLY — they have no habit challenge. "
+            "Do NOT mention habits, habit streaks, or habit counts anywhere. "
+            "Focus entirely on steps, step streak, daily target, and rank."
+        )
+    else:
+        context = (
+            "This user tracks HABITS ONLY — they have no step challenge. "
+            "Do NOT mention steps, step streaks, daily step targets, or rank anywhere. "
+            "Focus entirely on habit completions, habit streaks, and perfect days."
+        )
+
     return (
+        f"{context}\n\n"
         "Here are the user's stats for the past 7 days:\n"
         f"{json.dumps(stats, indent=2)}\n\n"
         "Generate the insight JSON now."
@@ -423,13 +469,11 @@ async def _call_provider(stats: dict, provider: str) -> dict:
 
 
 async def _ask_claude(stats: dict) -> dict:
-    import anthropic
     try:
         client = _get_anthropic()
         async with client.messages.stream(
             model="claude-opus-4-6",
             max_tokens=1024,
-            thinking={"type": "adaptive"},
             system=_SYSTEM,
             messages=[{"role": "user", "content": _build_user_message(stats)}],
         ) as stream:
@@ -438,8 +482,8 @@ async def _ask_claude(stats: dict) -> dict:
         raw = next((b.text for b in message.content if b.type == "text"), "{}")
         return _parse_response(raw, stats)
 
-    except anthropic.APIError as e:
-        logger.error(f"Claude insight error: {e}")
+    except Exception as e:
+        logger.error(f"Claude insight error: {e}", exc_info=True)
         return _fallback(stats)
 
 
@@ -466,22 +510,34 @@ async def _ask_azure(stats: dict) -> dict:
 # ── fallback ──────────────────────────────────────────────────────────────────
 
 def _fallback(stats: dict) -> dict:
-    steps = stats.get("steps_yesterday", 0)
-    done  = stats.get("habits_done_yesterday", 0)
-    total = stats.get("habits_total", 0)
-    streak = stats.get("streak_current", 0)
+    steps  = stats.get("steps_yesterday", 0)
+    done   = stats.get("habits_done_yesterday", 0)
+    total  = stats.get("habits_total", 0)
+    streak = stats.get("step_streak", 0) or stats.get("streak_current", 0)
+
+    segments: list = [{"text": f"{steps:,} steps", "style": "stat", "color": "purple"}]
+    if total > 0:
+        segments += [
+            {"text": " and ",                       "style": "normal",    "color": None},
+            {"text": f"{done}/{total} habits",       "style": "highlight", "color": "green"},
+            {"text": " done yesterday.",             "style": "normal",    "color": None},
+        ]
+    else:
+        segments.append({"text": " logged yesterday.", "style": "normal", "color": None})
+
+    detail: list
+    if streak > 0:
+        detail = [
+            {"text": "Step streak at ",   "style": "normal", "color": None},
+            {"text": f"{streak} days",    "style": "stat",   "color": "orange"},
+            {"text": " — don't break it.", "style": "normal", "color": None},
+        ]
+    else:
+        detail = [{"text": "Start a streak today — one step at a time.", "style": "normal", "color": None}]
+
     return {
-        "badge": "Yesterday at a glance",
-        "segments": [
-            {"text": f"{steps:,} steps", "style": "stat",   "color": "purple"},
-            {"text": " logged and ",     "style": "normal",  "color": None},
-            {"text": f"{done} of {total} habits", "style": "highlight", "color": "green"},
-            {"text": " kept.",           "style": "normal",  "color": None},
-        ],
-        "detail": [
-            {"text": "Streak at ", "style": "normal",  "color": None},
-            {"text": f"{streak} days", "style": "stat", "color": "orange"},
-            {"text": " — keep going.", "style": "normal", "color": None},
-        ],
-        "hook": "Come back tomorrow to see your streak grow.",
+        "badge":    "Yesterday at a glance",
+        "segments": segments,
+        "detail":   detail,
+        "hook":     "Come back tomorrow to see your progress grow.",
     }

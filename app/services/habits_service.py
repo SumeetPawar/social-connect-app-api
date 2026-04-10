@@ -5,11 +5,120 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 from fastapi import HTTPException
 
-from app.models import HabitChallenge, ChallengeStatus, DailyLog, Habit, HabitCommitment
+from app.models import HabitChallenge, ChallengeStatus, DailyLog, Habit, HabitCommitment, User
 from app.schemas.habits import ChallengeCreate
 from app.services.reminder_service import fire_habit_perfect_day, fire_habit_streak_milestone
 
 _STREAK_MILESTONES = {3, 7, 14, 21, 30}
+
+
+# ── Shield / streak helper ────────────────────────────────────────────────────
+
+def _compute_shield_streak(
+    by_date: dict,
+    started_at: date,
+    end_day: date,
+    total_habits: int,
+    today: date,
+) -> dict:
+    """
+    Shared shield-and-streak logic used by get_streak() and get_history().
+
+    Rules:
+    - A day "counts" if completed habits >= min_required (50% floor, min 1).
+    - Shields are earned 1 at a time: every 4 consecutive good days earn 1 shield.
+      Max 1 shield held at a time — must use it before earning the next.
+    - A shield bridges 1 missed day, keeping the effective streak alive.
+      After using a shield, the 4-day counter resets.
+    - current_streak  = raw consecutive good days (no shield help) from today back.
+    - effective_streak = streak computed by the forward simulation (shields applied).
+    - Today grace: if today has zero logs at all, skip without penalty (day not over).
+    """
+    min_required = max(1, -(-total_habits // 2))  # ceil(total/2)
+
+    # ── Forward pass: raw segments (for current_streak and longest_streak) ────
+    segments: list[tuple[int, date]] = []
+    cur = 0
+    cur_end: date | None = None
+    d = started_at
+    while d <= end_day:
+        if by_date.get(d, 0) >= min_required:
+            cur += 1
+            cur_end = d
+        else:
+            if cur > 0:
+                segments.append((cur, cur_end))  # type: ignore[arg-type]
+            cur = 0
+            cur_end = None
+        d += timedelta(days=1)
+    if cur > 0:
+        segments.append((cur, cur_end))  # type: ignore[arg-type]
+
+    longest = max((length for length, _ in segments), default=0)
+
+    # Raw current streak: last segment if it touches today or yesterday
+    raw_current = 0
+    if segments:
+        last_len, last_end = segments[-1]
+        if last_end == end_day or last_end == end_day - timedelta(days=1):
+            raw_current = last_len
+
+    # ── Forward simulation: effective streak with earn-one-use-one shields ────
+    # Walk forward day by day.
+    # - Good days increment the streak and the "consecutive" counter.
+    # - Every 4th consecutive good day earns 1 shield (if bank is empty).
+    #   The consecutive counter resets so the next shield needs another 4 days.
+    # - Missed day: use shield if available (streak continues, counter resets),
+    #   otherwise the effective streak is broken.
+    # - Today with zero logs: grace — skip without penalty, don't count.
+    shield_bank = 0       # 0 or 1
+    consecutive = 0       # good days since last shield earned or last gap
+    effective = 0
+    shields_earned = 0
+    shields_used = 0
+    shield_used_on_dates: list[date] = []
+    in_streak = True
+
+    d = started_at
+    while d <= end_day:
+        good = by_date.get(d, 0) >= min_required
+        today_grace = (d == today and by_date.get(d, 0) == 0)
+
+        if good:
+            effective += 1
+            consecutive += 1
+            if consecutive == 4 and shield_bank == 0:
+                shield_bank = 1
+                shields_earned += 1
+                consecutive = 0   # reset — next shield needs another 4 days
+        elif today_grace:
+            pass  # day not over, no penalty
+        else:
+            # Missed day
+            if in_streak and shield_bank > 0:
+                shield_bank -= 1
+                shields_used += 1
+                shield_used_on_dates.append(d)
+                effective += 1
+                consecutive = 0   # reset after using shield
+            else:
+                in_streak = False
+                effective = 0
+                consecutive = 0
+                shield_bank = 0   # unspent shield is lost when streak breaks
+
+        d += timedelta(days=1)
+
+    return {
+        "current_streak":       raw_current,   # raw consecutive good days (no shields)
+        "effective_streak":     effective,      # forward-simulated shield-protected streak
+        "longest_streak":       longest,
+        "shields_earned":       shields_earned,
+        "shields_used":         shields_used,
+        "shield_used_on_dates": shield_used_on_dates,
+    }
+
+
 async def _get_habit(db: AsyncSession, slug: str) -> Habit:
     result = await db.execute(select(Habit).where(Habit.slug == slug))
     h = result.scalar_one_or_none()
@@ -150,8 +259,8 @@ async def upsert_log(db: AsyncSession, user_id: str, commitment_id: int,
 
         if total_habits > 0 and done_today >= total_habits:
             await fire_habit_perfect_day(db, user_id, challenge_id)
-        elif streak.get("current_streak", 0) in _STREAK_MILESTONES:
-            await fire_habit_streak_milestone(db, user_id, streak["current_streak"])
+        elif streak.get("effective_streak", 0) in _STREAK_MILESTONES:
+            await fire_habit_streak_milestone(db, user_id, streak["effective_streak"])
 
     return {
         "id": log.id,
@@ -164,14 +273,19 @@ async def upsert_log(db: AsyncSession, user_id: str, commitment_id: int,
     }
 
 
-async def get_leaderboard(db: AsyncSession, days: int = 7) -> list[dict]:
+async def get_leaderboard(
+    db: AsyncSession,
+    days: int = 7,
+    department_id: str | None = None,
+    current_user_id: str | None = None,
+) -> list[dict]:
     from sqlalchemy.orm import selectinload
     today = date.today()
     period_start = today - timedelta(days=days - 1)
     prev_start   = period_start - timedelta(days=days)
     prev_end     = period_start - timedelta(days=1)
 
-    result = await db.execute(
+    q = (
         select(HabitChallenge)
         .options(
             selectinload(HabitChallenge.user),
@@ -179,6 +293,11 @@ async def get_leaderboard(db: AsyncSession, days: int = 7) -> list[dict]:
         )
         .where(HabitChallenge.status == ChallengeStatus.active)
     )
+    if department_id:
+        q = q.join(User, User.id == HabitChallenge.user_id).where(
+            User.department_id == department_id
+        )
+    result = await db.execute(q)
     challenges = result.scalars().all()
 
     def compute_stats(challenge, start: date, end: date) -> dict:
@@ -194,7 +313,6 @@ async def get_leaderboard(db: AsyncSession, days: int = 7) -> list[dict]:
             for log in cm.logs
             if actual_start <= log.logged_date <= actual_end and log.completed
         )
-        # streak is only computed for current window
         by_date: dict[date, int] = defaultdict(int)
         for cm in challenge.commitments:
             for log in cm.logs:
@@ -202,7 +320,7 @@ async def get_leaderboard(db: AsyncSession, days: int = 7) -> list[dict]:
                     by_date[log.logged_date] += 1
         streak = 0
         d = today
-        min_required = max(1, int(total_habits * 0.5 + 0.0001))
+        min_required = max(1, -(-total_habits // 2))  # ceil(total/2)
         while d >= challenge.started_at:
             if by_date.get(d, 0) >= min_required:
                 streak += 1
@@ -211,9 +329,9 @@ async def get_leaderboard(db: AsyncSession, days: int = 7) -> list[dict]:
                 break
         return {
             "completion_pct": round(completed / max(possible, 1) * 100, 1),
-            "completed": completed,
-            "possible": possible,
-            "streak": streak,
+            "completed":      completed,
+            "possible":       possible,
+            "streak":         streak,
         }
 
     entries = []
@@ -228,22 +346,22 @@ async def get_leaderboard(db: AsyncSession, days: int = 7) -> list[dict]:
             "name":            user.name or user.email,
             "profile_pic_url": user.profile_pic_url,
             "challenge_id":    challenge.id,
+            "is_me":           str(user.id) == current_user_id,
             "_prev_pct":       prev["completion_pct"],
             **curr,
         })
 
-    # Sort current window — best completion%, then streak as tiebreaker
-    entries.sort(key=lambda x: (-x["completion_pct"], -x["streak"]))
+    # Sort: best completion %, then total habits completed as tiebreaker
+    entries.sort(key=lambda x: (-x["completion_pct"], -x["completed"]))
     for i, e in enumerate(entries):
         e["rank"] = i + 1
 
-    # Derive previous ranks from previous period stats
-    prev_sorted = sorted(entries, key=lambda x: -x["_prev_pct"])
+    # Rank change vs previous period
+    prev_sorted  = sorted(entries, key=lambda x: (-x["_prev_pct"], -x["completed"]))
     prev_rank_map = {e["user_id"]: i + 1 for i, e in enumerate(prev_sorted)}
-
     for e in entries:
-        prev_rank      = prev_rank_map.get(e["user_id"], e["rank"])
-        e["rank_change"] = prev_rank - e["rank"]   # positive = moved UP
+        prev_rank        = prev_rank_map.get(e["user_id"], e["rank"])
+        e["rank_change"] = prev_rank - e["rank"]  # positive = moved UP
         del e["_prev_pct"]
 
     return entries
@@ -291,58 +409,15 @@ async def get_challenge_history(db: AsyncSession, user_id: str) -> list[dict]:
 
         perfect_days = sum(1 for v in by_date.values() if v >= total_habits) if total_habits else 0
 
-        # SHIELD LOGIC
-        # 1 shield is earned for every 4-day streak (can earn multiple)
-        # If streak breaks and shield is available, shield is consumed and streak continues
-        # Only one shield can be used per break
-        # Calculate shields for the whole challenge period
-        streaks = []  # list of (start, end, length)
-        shields_earned = 0
-        shields_used = 0
-        effective_streak = 0
-        min_required = max(1, int(total_habits * 0.5 + 0.0001))
-        d = challenge.started_at
+        # SHIELD LOGIC — delegated to shared helper
         end = min(today, challenge.ends_at)
-        cur = 0
-        while d <= end:
-            if by_date.get(d, 0) >= min_required:
-                cur += 1
-            else:
-                if cur > 0:
-                    streaks.append(cur)
-                cur = 0
-            d += timedelta(days=1)
-        if cur > 0:
-            streaks.append(cur)
-
-        # Calculate shields earned
-        shields_earned = sum(s // 4 for s in streaks)
-
-        # Now, simulate shield protection for the current streak (active only)
-        # If today hasn't been logged yet, don't penalise — start from yesterday
-        current = 0
-        shields_left = shields_earned
-        shield_used_on_dates = []
-        if challenge.status == ChallengeStatus.active:
-            streak_start = today if by_date.get(today, 0) >= min_required else today - timedelta(days=1)
-            d = streak_start
-            while d >= challenge.started_at:
-                if by_date.get(d, 0) >= min_required:
-                    current += 1
-                    d -= timedelta(days=1)
-                else:
-                    if shields_left > 0:
-                        shields_used += 1
-                        shields_left -= 1
-                        shield_used_on_dates.append(d)
-                        current += 1
-                        d -= timedelta(days=1)
-                    else:
-                        break
-        effective_streak = current
-
-        # longest streak across entire challenge (no shield protection)
-        longest = max(streaks) if streaks else 0
+        ss = _compute_shield_streak(by_date, challenge.started_at, end, total_habits, today)
+        shields_earned       = ss["shields_earned"]
+        shields_used         = ss["shields_used"]
+        shield_used_on_dates = ss["shield_used_on_dates"]
+        effective_streak     = ss["effective_streak"]
+        current              = ss["current_streak"]    # raw streak (no shields)
+        longest              = ss["longest_streak"]
 
         # Build per-day breakdown
         daily_logs = []
@@ -432,60 +507,16 @@ async def get_streak(db: AsyncSession, challenge_id: int, user_id: str) -> dict:
     days_elapsed = (today - challenge.started_at).days + 1
     perfect_days = sum(1 for v in by_date.values() if v >= total)
 
-    # SHIELD LOGIC (same as in history)
-    streaks = []
-    shields_earned = 0
-    shields_used = 0
-    effective_streak = 0
-    min_required = max(1, int(total * 0.5 + 0.0001))
-    d = challenge.started_at
-    cur = 0
-    while d <= today:
-        if by_date.get(d, 0) >= min_required:
-            cur += 1
-        else:
-            if cur > 0:
-                streaks.append(cur)
-            cur = 0
-        d += timedelta(days=1)
-    if cur > 0:
-        streaks.append(cur)
-
-    shields_earned = sum(s // 4 for s in streaks)
-
-    # Simulate shield protection for current streak
-    # If today hasn't been logged yet, don't penalise — start from yesterday
-    streak_start = today if by_date.get(today, 0) >= min_required else today - timedelta(days=1)
-    current = 0
-    shields_left = shields_earned
-    shield_used_on_dates = []
-    d = streak_start
-    while d >= challenge.started_at:
-        if by_date.get(d, 0) >= min_required:
-            current += 1
-            d -= timedelta(days=1)
-        else:
-            if shields_left > 0:
-                shields_used += 1
-                shields_left -= 1
-                shield_used_on_dates.append(d)
-                current += 1
-                d -= timedelta(days=1)
-            else:
-                break
-    effective_streak = current
-
-    # longest streak (no shield protection)
-    longest = max(streaks) if streaks else 0
+    ss = _compute_shield_streak(by_date, challenge.started_at, today, total, today)
 
     return {
-        "challenge_id": challenge_id,
-        "current_streak": current,
-        "longest_streak": longest,
-        "perfect_days": perfect_days,
-        "completion_pct": round(perfect_days / max(days_elapsed, 1) * 100, 1),
-        "shields_earned": shields_earned,
-        "shields_used": shields_used,
-        "effective_streak": effective_streak,
-        "shield_used_on_dates": shield_used_on_dates,
+        "challenge_id":         challenge_id,
+        "current_streak":       ss["current_streak"],
+        "longest_streak":       ss["longest_streak"],
+        "perfect_days":         perfect_days,
+        "completion_pct":       round(perfect_days / max(days_elapsed, 1) * 100, 1),
+        "shields_earned":       ss["shields_earned"],
+        "shields_used":         ss["shields_used"],
+        "effective_streak":     ss["effective_streak"],
+        "shield_used_on_dates": ss["shield_used_on_dates"],
     }

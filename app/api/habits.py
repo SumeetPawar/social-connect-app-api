@@ -82,11 +82,16 @@ async def leaderboard(
     db: AsyncSession = Depends(get_db),
 ):
     """
-    Leaderboard of all users with active habit challenges.
-    Returns completion %, habit counts, streak and rank change vs previous period.
+    Habit leaderboard for the current user's department.
+    Returns rank, completion %, completed/possible habit counts, streak and rank change.
     """
     today = date.today()
-    entries = await svc.get_leaderboard(db, days)
+    entries = await svc.get_leaderboard(
+        db,
+        days=days,
+        department_id=str(current_user.department_id),
+        current_user_id=str(current_user.id),
+    )
     return {
         "period_days":  days,
         "period_start": today - timedelta(days=days - 1),

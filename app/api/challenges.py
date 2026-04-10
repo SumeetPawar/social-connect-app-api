@@ -384,62 +384,63 @@ async def get_challenge_leaderboard(
     result = await db.execute(participants_count_query, {"challenge_id": challenge_id})
     participants_count = result.scalar()
     
-    # Get leaderboard data with completion percentage
+    yesterday = today - timedelta(days=1)
+
+    # Get leaderboard data — rank_change computed live (today vs yesterday)
     leaderboard_query = text("""
         WITH user_totals AS (
-            SELECT 
+            SELECT
                 cp.user_id,
                 u.name,
                 cp.selected_daily_target,
                 cp.challenge_current_streak,
                 cp.challenge_longest_streak,
-                cp.previous_rank,
-                cp.previous_consistency_rank,
-                COALESCE(SUM(ds.steps), 0) as total_steps,
-                COALESCE(AVG(ds.steps), 0) as avg_steps,
+                COALESCE(SUM(ds.steps), 0)                               AS total_steps,
+                COALESCE(SUM(CASE WHEN ds.day <= :yesterday THEN ds.steps ELSE 0 END), 0) AS yesterday_steps,
+                COALESCE(AVG(ds.steps), 0)                               AS avg_steps,
                 COUNT(DISTINCT ds.day) FILTER (
                     WHERE ds.steps >= cp.selected_daily_target
-                ) as days_met_goal,
-                COUNT(DISTINCT ds.day) as days_logged
+                )                                                         AS days_met_goal,
+                COUNT(DISTINCT ds.day)                                    AS days_logged
             FROM challenge_participants cp
             JOIN users u ON u.id = cp.user_id
-            LEFT JOIN daily_steps ds ON ds.user_id = cp.user_id 
-                AND ds.day >= :start_date 
+            LEFT JOIN daily_steps ds
+                ON ds.user_id = cp.user_id
+                AND ds.day >= :start_date
                 AND ds.day <= :end_date_or_today
             WHERE cp.challenge_id = :challenge_id
-            AND cp.left_at IS NULL
-            GROUP BY cp.user_id, u.name, cp.selected_daily_target, cp.challenge_current_streak, cp.challenge_longest_streak, cp.previous_rank, cp.previous_consistency_rank
+              AND cp.left_at IS NULL
+            GROUP BY cp.user_id, u.name, cp.selected_daily_target,
+                     cp.challenge_current_streak, cp.challenge_longest_streak
         ),
         ranked AS (
-            SELECT 
+            SELECT
                 user_id,
                 name,
-                selected_daily_target as goal,
-                challenge_current_streak as streak,
-                challenge_longest_streak as longest_streak,
-                previous_rank,
-                previous_consistency_rank,
+                selected_daily_target                                      AS goal,
+                challenge_current_streak                                   AS streak,
+                challenge_longest_streak                                   AS longest_streak,
                 total_steps,
+                yesterday_steps,
                 avg_steps,
                 days_met_goal,
                 days_logged,
-                CASE 
-                    WHEN :total_days > 0 THEN 
-                        ROUND((days_met_goal::numeric / :total_days) * 100, 1)
-                    ELSE 0 
-                END as completion_pct,
-                RANK() OVER (ORDER BY total_steps DESC, name ASC) as rank
+                CASE WHEN :total_days > 0
+                     THEN ROUND((days_met_goal::numeric / :total_days) * 100, 1)
+                     ELSE 0
+                END                                                        AS completion_pct,
+                RANK() OVER (ORDER BY total_steps DESC, name ASC)         AS rank,
+                RANK() OVER (ORDER BY yesterday_steps DESC, name ASC)     AS yesterday_rank
             FROM user_totals
         )
-        SELECT 
+        SELECT
             rank,
+            yesterday_rank,
             user_id,
             name,
             goal,
             streak,
             longest_streak,
-            previous_rank,
-            previous_consistency_rank,
             total_steps,
             avg_steps,
             days_met_goal,
@@ -453,10 +454,11 @@ async def get_challenge_leaderboard(
     result = await db.execute(
         leaderboard_query,
         {
-            "challenge_id": challenge_id,
-            "start_date": start_date,
+            "challenge_id":     challenge_id,
+            "start_date":       start_date,
             "end_date_or_today": challenge_end_or_today,
-            "total_days": total_challenge_days
+            "yesterday":        yesterday,
+            "total_days":       total_challenge_days,
         }
     )
     leaderboard_data = result.mappings().all()
@@ -496,22 +498,24 @@ async def get_challenge_leaderboard(
         # Get initials
         name_parts = user['name'].split() if user['name'] else ['?', '?']
         initials = ''.join([part[0].upper() for part in name_parts[:2]])
+        yesterday_rank = user.get('yesterday_rank')
+        rank_change = (int(yesterday_rank) - int(user['rank'])) if yesterday_rank else None
+        consistency_rank = user_id_to_consistency_rank.get(str(user['user_id']))
         leaderboard.append({
-            "rank": user['rank'],
-            "consistency_rank": user_id_to_consistency_rank.get(str(user['user_id'])),
-            "user_id": str(user['user_id']),
-            "name": user['name'],
-            "initials": initials,
-            "total_steps": user['total_steps'],
-            "streak": user['streak'],
-            "longest_streak": max(user.get('longest_streak', 0) or 0, user['streak']),
-            "days_met_goal": user['days_met_goal'],
-            "days_logged": user['days_logged'],
-            "completion_pct": float(user['completion_pct']),
-            "previous_rank": user.get('previous_rank') if user['total_steps'] > 0 else None,
-            "previous_consistency_rank": user.get('previous_consistency_rank') if user['total_steps'] > 0 else None,
-            "is_me": str(user['user_id']) == str(current_user.id),
-            "is_top": user['rank'] == 1
+            "rank":               user['rank'],
+            "rank_change":        rank_change,        # positive = moved up today
+            "consistency_rank":   consistency_rank,
+            "user_id":            str(user['user_id']),
+            "name":               user['name'],
+            "initials":           initials,
+            "total_steps":        user['total_steps'],
+            "streak":             user['streak'],
+            "longest_streak":     max(user.get('longest_streak', 0) or 0, user['streak']),
+            "days_met_goal":      user['days_met_goal'],
+            "days_logged":        user['days_logged'],
+            "completion_pct":     float(user['completion_pct']),
+            "is_me":              str(user['user_id']) == str(current_user.id),
+            "is_top":             user['rank'] == 1,
         })
     
     # Determine badge based on rank

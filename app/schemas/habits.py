@@ -115,6 +115,7 @@ class LeaderboardEntry(BaseModel):
     name: Optional[str]
     profile_pic_url: Optional[str]
     challenge_id: int
+    is_me: bool               # true for the requesting user
     completion_pct: float
     completed: int            # habits completed in period
     possible: int             # total possible (habits × days)

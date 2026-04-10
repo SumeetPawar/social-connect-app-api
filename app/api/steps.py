@@ -234,34 +234,67 @@ async def add_steps(
         db.add(daily_steps)
         steps_changed = True
     
-    await db.commit()
-    await db.refresh(daily_steps)
-    
-    # ========== RECALCULATE STREAKS IF STEPS CHANGED ==========
+    # ========== SNAPSHOT RANK + RECALCULATE STREAKS IF STEPS CHANGED ==========
     if steps_changed:
         # Find all active challenges that include this date
         challenges_query = text("""
-            SELECT DISTINCT c.id
+            SELECT DISTINCT c.id, c.start_date, LEAST(c.end_date, :today) AS end_cap
             FROM challenges c
             JOIN challenge_participants cp ON cp.challenge_id = c.id
             WHERE cp.user_id = :user_id
             AND cp.left_at IS NULL
             AND :log_date BETWEEN c.start_date AND c.end_date
         """)
-        
         result = await db.execute(
             challenges_query,
-            {"user_id": current_user.id, "log_date": log_date}
+            {"user_id": str(current_user.id), "log_date": log_date, "today": date.today()}
         )
-        active_challenges = result.scalars().all()
-        
-        # Update streak for each affected challenge
-        for challenge_id in active_challenges:
+        active_challenges = result.mappings().all()
+
+        for ch in active_challenges:
+            challenge_id = str(ch["id"])
+
+            # Snapshot live rank BEFORE committing new steps (baseline for rank_change)
+            rank_row = await db.execute(text("""
+                WITH totals AS (
+                    SELECT cp.user_id,
+                           COALESCE(SUM(ds.steps), 0) AS total_steps
+                    FROM challenge_participants cp
+                    LEFT JOIN daily_steps ds
+                        ON ds.user_id = cp.user_id
+                        AND ds.day >= :start AND ds.day <= :end_cap
+                    WHERE cp.challenge_id = :cid AND cp.left_at IS NULL
+                    GROUP BY cp.user_id
+                )
+                SELECT ROW_NUMBER() OVER (ORDER BY total_steps DESC) AS live_rank
+                FROM totals WHERE user_id = :uid
+            """), {
+                "cid":     challenge_id,
+                "start":   ch["start_date"],
+                "end_cap": ch["end_cap"],
+                "uid":     str(current_user.id),
+            })
+            rr = rank_row.mappings().first()
+            if rr and rr["live_rank"]:
+                await db.execute(text("""
+                    UPDATE challenge_participants
+                    SET previous_rank = :rank
+                    WHERE challenge_id = :cid AND user_id = :uid
+                """), {"rank": int(rr["live_rank"]), "cid": challenge_id, "uid": str(current_user.id)})
+
+        await db.commit()
+        await db.refresh(daily_steps)
+
+        # Recalculate streaks after committing new steps
+        for ch in active_challenges:
             await calculate_challenge_streak(
                 user_id=str(current_user.id),
-                challenge_id=str(challenge_id),
+                challenge_id=str(ch["id"]),
                 db=db
             )
+    else:
+        await db.commit()
+        await db.refresh(daily_steps)
     # =========================================================
     
     return {

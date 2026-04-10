@@ -23,7 +23,7 @@ logger = logging.getLogger(__name__)
 # Create scheduler instance - will be started from main.py
 # misfire_grace_time=1: jobs missed by more than 1 second are skipped on restart
 # (avoids a flood of WARNING logs for jobs that fired while the app was offline)
-scheduler = AsyncIOScheduler(job_defaults={"misfire_grace_time": 1, "coalesce": True})
+scheduler = AsyncIOScheduler(job_defaults={"misfire_grace_time": 3600, "coalesce": True})
 
 
 async def update_all_previous_ranks():
