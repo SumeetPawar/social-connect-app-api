@@ -13,9 +13,10 @@ from pydantic import BaseModel
 
 from app.db.deps import get_db
 from app.auth.deps import get_current_user
-from app.models import User, BodyMetrics
+from app.models import User, BodyMetrics, AiRecommendation
 from app.schemas.body_metrics import BodyMetricCreate, BodyMetricOut, HistoryResponse, HistoryResponse          # adjust import path if needed
 from app.services.ai_recommendations import get_body_insight
+from sqlalchemy import delete
 
 router = APIRouter(prefix="/api/body-metrics", tags=["Body Metrics"])
  
@@ -28,13 +29,16 @@ def _calc_bmi(weight_kg: float, height_cm: float) -> Optional[float]:
     return round(float(weight_kg) / float(h * h), 1)
 
 
-@router.post("", response_model=BodyMetricOut) 
+@router.post("")
 async def save_scan(
     data: BodyMetricCreate,
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
-    """Save a new body composition scan for the logged-in user. Replace if same date exists."""
+    """
+    Save a new body composition scan.
+    Returns the saved record + a fresh AI insight (cached insight is invalidated on every save).
+    """
 
     # Use override height or fall back to user's stored height
     height = data.height_cm or getattr(current_user, "height_cm", None)
@@ -89,7 +93,23 @@ async def save_scan(
     
     await db.commit()
     await db.refresh(record)
-    return record
+
+    # Invalidate cached body insight — new scan data means stale analysis
+    await db.execute(
+        delete(AiRecommendation).where(
+            AiRecommendation.user_id == str(current_user.id),
+            AiRecommendation.type == "body_insight",
+        )
+    )
+    await db.commit()
+
+    # Generate fresh AI insight (runs synchronously — typically <3s)
+    ai_insight = await get_body_insight(db, str(current_user.id))
+
+    return {
+        "scan":       BodyMetricOut.model_validate(record),
+        "ai_insight": ai_insight,
+    }
 
 @router.get("/latest", response_model=BodyMetricOut)
 async def get_latest(

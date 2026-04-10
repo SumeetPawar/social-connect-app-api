@@ -373,7 +373,7 @@ Return ONLY a valid JSON object (no markdown, no code fences) with these four ke
   - Never start with "You"
 
 "detail"
-  A second insight as rich-text spans (max 25 words).
+  A second insight as rich-text spans (max 18 words).
   - Must name a specific habit OR a time-of-day pattern
   - Should feel like a coach noticing something the user missed
   - If there is a gap (missed habit, low step day), mention it with a gentle forward-looking tip

@@ -112,32 +112,81 @@ async def _ask_ai(system: str, user_msg: str) -> str:
 # ══════════════════════════════════════════════════════════════════════════════
 
 _BODY_SYSTEM = """\
-You are a health coach reviewing a user's body composition scan history.
-Speak directly to the user as "you". Plain language. No medical jargon.
-Be honest — celebrate real improvements, flag real risks without scaremongering.
+You are a personal health coach reviewing a user's body composition data.
+Your job: turn raw scan numbers into insights the user can actually act on today.
 
-Return ONLY valid JSON (no markdown) with these keys:
+Rules:
+- No jargon. A 16-year-old should understand every word.
+- Be specific — reference exact numbers, not vague trends.
+- Every insight must have a "so what" — why does this number matter to the user's daily life?
+- The best action must be concrete: "walk 20 minutes after dinner", not "exercise more".
+- Celebrate genuine wins. Flag real concerns calmly, never alarm.
 
-"trend_summary"
-  2-3 sentences. Overall picture of what the data shows.
-  Mention the most significant positive trend and the most significant concern.
+Return ONLY valid JSON (no markdown, no code fences) with exactly these keys:
+
+─── SPAN FORMAT (used in every rich-text field) ───
+Array of span objects: { "text": "...", "style": "...", "color": "..." }
+
+  style:
+    "normal"    → plain text
+    "stat"      → a number or metric value — render bold with accent color
+    "highlight" → a metric name as a label — render as colored chip/pill
+    "bold"      → emphasis phrase — render bold, no background
+
+  color (use only these, or null):
+    "green"   → improvement, good news
+    "rose"    → concern, needs attention
+    "orange"  → caution, mild risk
+    "purple"  → steps / activity metrics
+    "teal"    → action, tip, recommendation
+
+  SPACING RULE: spans join with no gap. Always put a space at the start or end
+  of "normal" spans that sit between two styled spans.
+
+─── KEYS ───
+
+"summary"
+  Rich text. 1-2 sentences, ≤25 words.
+  Open with the single most meaningful change or achievement.
+  If only 1 scan: summarise current state and what to watch.
+  Must include at least 1 "stat" span and 1 "highlight" span.
 
 "highlights"
-  Array of 2-4 objects: {"metric": str, "direction": "up"|"down"|"stable", "note": str}
-  metric: human-readable name (e.g. "Body fat %", "Skeletal muscle %", "Metabolic age")
-  direction: whether the metric went up, down, or stayed stable over the period
-  note: 1 sentence — what this means for the user in plain English
+  Array of 2-4 metric cards, ordered by PRIORITY — most urgent or impactful first.
+  Priority order: (1) active concern/risk, (2) biggest positive change, (3) stable metrics.
+  Each card:
+  {
+    "metric":    str          — short human label: "Body fat", "Muscle mass", "Visceral fat", "Hydration"
+    "direction": "up"|"down"|"stable"
+    "value":     str          — current value with unit: "18.2%", "32.1 kg", "Level 8"
+    "delta":     str|null     — signed change from first scan: "-1.4%", "+0.8 kg", null if 1 scan
+    "priority":  "high"|"medium"|"low"   — high = needs attention or biggest win, low = informational
+    "note":      rich text    — ≤12 words. Answer: "what does this mean for me right now?"
+      Good examples:
+        Body fat down → [{"text":"In the healthy range","style":"bold","color":"green"},{"text":" — your diet is working.","style":"normal","color":null}]
+        Visceral fat high → [{"text":"High visceral fat","style":"highlight","color":"rose"},{"text":" stresses your organs. Reduce refined sugar.","style":"normal","color":null}]
+        Muscle stable → [{"text":"Holding strong","style":"bold","color":"teal"},{"text":" — add resistance training to grow it.","style":"normal","color":null}]
+  }
+  Pick metrics with actual data. Skip metrics with null values.
+  Color per direction:
+    fat/visceral going down → green. Going up → rose.
+    muscle/hydration going up → green. Going down → rose.
+    stable → teal.
 
 "warning"
-  null if nothing concerning. Otherwise: 1 sentence about the most important
-  health signal to watch (e.g. high visceral fat, rising metabolic age).
-  Never alarming — informative and calm.
+  null if nothing concerning.
+  Otherwise rich text, ≤15 words.
+  Only trigger for: visceral fat > 12, metabolic age > biological age + 5, body fat in obese range.
+  Use "orange" for caution, "rose" only if genuinely important.
 
-"tip"
-  One specific, actionable lifestyle tip linked directly to what the data shows.
-  Must reference a specific metric and a concrete action.
-  Example: "Your visceral fat is elevated — 30 minutes of walking 5× per week
-  is the single most effective way to reduce it."
+"action"
+  The single most impactful thing the user can do RIGHT NOW based on their data.
+  Rich text, ≤20 words. Must be specific — include a frequency, duration, or quantity.
+  Must reference the metric it targets as a "highlight" span.
+  Start with a verb. Use "teal" for the action itself.
+  Examples:
+    [{"text":"Walk ","style":"stat","color":"teal"},{"text":"20 min after dinner","style":"bold","color":"teal"},{"text":" — the fastest way to reduce ","style":"normal","color":null},{"text":"visceral fat","style":"highlight","color":"orange"},{"text":".","style":"normal","color":null}]
+    [{"text":"Add ","style":"normal","color":null},{"text":"25g protein","style":"stat","color":"green"},{"text":" per meal to protect your ","style":"normal","color":null},{"text":"muscle mass","style":"highlight","color":"green"},{"text":" while losing fat.","style":"normal","color":null}]
 """
 
 
@@ -196,24 +245,62 @@ async def _collect_body_stats(db: AsyncSession, user_id: str) -> dict | None:
     }
 
 
+def _span(text: str, style: str = "normal", color: str | None = None) -> dict:
+    return {"text": text, "style": style, "color": color}
+
+
+def _validate_spans(spans: object) -> list:
+    if not isinstance(spans, list):
+        return [_span(str(spans))]
+    valid_styles = {"normal", "stat", "highlight", "bold"}
+    valid_colors = {"green", "rose", "orange", "purple", "teal", None}
+    out = []
+    for s in spans:
+        if not isinstance(s, dict) or "text" not in s:
+            continue
+        out.append({
+            "text":  str(s.get("text", "")),
+            "style": s.get("style") if s.get("style") in valid_styles else "normal",
+            "color": s.get("color") if s.get("color") in valid_colors else None,
+        })
+    return out or [_span("—")]
+
+
 def _fallback_body(stats: dict) -> dict:
     latest = stats.get("latest_scan", {})
     bf = latest.get("body_fat_pct")
     sm = latest.get("skeletal_muscle_pct")
-    d = stats.get("deltas", {})
+    n  = stats.get("total_scans", 1)
     return {
-        "trend_summary": (
-            f"Based on your {stats.get('total_scans', 1)} scan(s), here's what your "
-            f"body composition looks like right now."
-        ),
+        "summary": [
+            _span(f"{n} scan{'s' if n > 1 else ''} logged — ", "normal"),
+            _span("here's your body composition snapshot", "bold"),
+            _span(".", "normal"),
+        ],
         "highlights": [
-            {"metric": "Body fat %", "direction": "stable",
-             "note": f"Currently at {bf}%." if bf else "No data yet."},
-            {"metric": "Skeletal muscle %", "direction": "stable",
-             "note": f"Currently at {sm}%." if sm else "No data yet."},
+            {
+                "metric":    "Body fat",
+                "direction": "stable",
+                "value":     f"{bf}%" if bf else "—",
+                "delta":     None,
+                "priority":  "medium",
+                "note":      [_span("Current baseline — log more scans to see trends.", "normal")],
+            },
+            {
+                "metric":    "Skeletal muscle",
+                "direction": "stable",
+                "value":     f"{sm}%" if sm else "—",
+                "delta":     None,
+                "priority":  "low",
+                "note":      [_span("Strength foundation — keep training consistently.", "normal")],
+            },
         ],
         "warning": None,
-        "tip": "Log your body composition regularly to unlock trend analysis.",
+        "action": [
+            _span("Log scans ", "normal"),
+            _span("monthly", "highlight", "teal"),
+            _span(" to unlock personalised trend insights.", "normal"),
+        ],
     }
 
 
@@ -224,7 +311,7 @@ async def get_body_insight(db: AsyncSession, user_id: str) -> dict | None:
 
     stats = await _collect_body_stats(db, user_id)
     if stats is None:
-        return None  # no scans at all
+        return None
 
     try:
         raw = await _ask_ai(
@@ -232,14 +319,30 @@ async def get_body_insight(db: AsyncSession, user_id: str) -> dict | None:
             f"Body composition data:\n{json.dumps(stats, indent=2)}\n\nGenerate the analysis JSON."
         )
         data = json.loads(raw)
+
+        _priority_order = {"high": 0, "medium": 1, "low": 2}
+        raw_highlights = [h for h in data.get("highlights", []) if isinstance(h, dict)]
+        raw_highlights.sort(key=lambda h: _priority_order.get(h.get("priority", "low"), 2))
+        highlights = []
+        for h in raw_highlights[:4]:
+            highlights.append({
+                "metric":    str(h.get("metric", "")),
+                "direction": str(h.get("direction", "stable")),
+                "value":     str(h.get("value", "—")),
+                "delta":     str(h.get("delta")) if h.get("delta") else None,
+                "priority":  str(h.get("priority", "low")),
+                "note":      _validate_spans(h.get("note", [])),
+            })
+
+        warning_raw = data.get("warning")
         payload = {
-            "trend_summary": str(data.get("trend_summary", "")),
-            "highlights":    data.get("highlights", []),
-            "warning":       data.get("warning") or None,
-            "tip":           str(data.get("tip", "")),
+            "summary":    _validate_spans(data.get("summary", [])),
+            "highlights": highlights,
+            "warning":    _validate_spans(warning_raw) if warning_raw else None,
+            "action":     _validate_spans(data.get("action", [])),
         }
     except Exception as e:
-        logger.error(f"Body insight AI error for user {user_id}: {e}")
+        logger.error(f"Body insight AI error for user {user_id}: {e}", exc_info=True)
         payload = _fallback_body(stats)
 
     await _save(db, user_id, "body_insight", payload, stats)

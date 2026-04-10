@@ -613,3 +613,22 @@ class AiCoachReport(Base):
     summary:     Mapped[str]      = mapped_column(Text, nullable=False)
     raw_stats:   Mapped[dict]     = mapped_column(JSONB, nullable=False)
     created_at:  Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+
+class UserFeedback(Base):
+    """
+    User-submitted feedback or feature suggestions.
+    type = "bug" | "suggestion" | "general"
+    status = "open" | "reviewed" | "done"
+    """
+    __tablename__ = "user_feedback"
+
+    id:         Mapped[int]      = mapped_column(Integer, primary_key=True)
+    user_id:    Mapped[str]      = mapped_column(UUID(as_uuid=True), ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
+    type:       Mapped[str]      = mapped_column(Text, nullable=False, server_default=text("'general'"))
+    title:      Mapped[str]      = mapped_column(Text, nullable=False)
+    body:       Mapped[str | None] = mapped_column(Text, nullable=True)
+    rating:     Mapped[int | None] = mapped_column(Integer, nullable=True)   # 1-5 stars, optional
+    status:     Mapped[str]      = mapped_column(Text, nullable=False, server_default=text("'open'"))
+    meta:       Mapped[dict | None] = mapped_column(JSONB, nullable=True)    # app version, screen, etc.
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
