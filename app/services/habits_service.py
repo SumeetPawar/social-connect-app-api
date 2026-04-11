@@ -36,83 +36,68 @@ def _compute_shield_streak(
     """
     min_required = max(1, -(-total_habits // 2))  # ceil(total/2)
 
-    # ── Forward pass: raw segments (for current_streak and longest_streak) ────
-    segments: list[tuple[int, date]] = []
-    cur = 0
-    cur_end: date | None = None
-    d = started_at
-    while d <= end_day:
-        if by_date.get(d, 0) >= min_required:
-            cur += 1
-            cur_end = d
-        else:
-            if cur > 0:
-                segments.append((cur, cur_end))  # type: ignore[arg-type]
-            cur = 0
-            cur_end = None
-        d += timedelta(days=1)
-    if cur > 0:
-        segments.append((cur, cur_end))  # type: ignore[arg-type]
 
-    longest = max((length for length, _ in segments), default=0)
-
-    # Raw current streak: last segment if it touches today or yesterday
-    raw_current = 0
-    if segments:
-        last_len, last_end = segments[-1]
-        if last_end == end_day or last_end == end_day - timedelta(days=1):
-            raw_current = last_len
-
-    # ── Forward simulation: effective streak with earn-one-use-one shields ────
-    # Walk forward day by day.
-    # - Good days increment the streak and the "consecutive" counter.
-    # - Every 4th consecutive good day earns 1 shield (if bank is empty).
-    #   The consecutive counter resets so the next shield needs another 4 days.
-    # - Missed day: use shield if available (streak continues, counter resets),
-    #   otherwise the effective streak is broken.
-    # - Today with zero logs: grace — skip without penalty, don't count.
+    # ── Forward simulation: effective streak and shield-protected longest streak ──
     shield_bank = 0       # 0 or 1
     consecutive = 0       # good days since last shield earned or last gap
-    effective = 0
+    effective = 0         # current shield-protected streak (up to today)
+    max_effective = 0     # longest shield-protected streak
     shields_earned = 0
     shields_used = 0
     shield_used_on_dates: list[date] = []
-    in_streak = True
+    current_segment = 0   # for current_streak (raw, no shields)
+    raw_current = 0
 
     d = started_at
+    today_grace = False
     while d <= end_day:
         good = by_date.get(d, 0) >= min_required
-        today_grace = (d == today and by_date.get(d, 0) == 0)
+        today_grace = (d == today and not good)  # grace all day until min_required is met
 
         if good:
             effective += 1
             consecutive += 1
+            current_segment += 1
             if consecutive == 4 and shield_bank == 0:
                 shield_bank = 1
                 shields_earned += 1
                 consecutive = 0   # reset — next shield needs another 4 days
         elif today_grace:
-            pass  # day not over, no penalty
+            # Don't break streak, don't increment
+            pass
         else:
             # Missed day
-            if in_streak and shield_bank > 0:
+            if shield_bank > 0:
                 shield_bank -= 1
                 shields_used += 1
                 shield_used_on_dates.append(d)
                 effective += 1
                 consecutive = 0   # reset after using shield
+                # current_segment does NOT increment (raw streak broken)
             else:
-                in_streak = False
+                # Streak broken (both effective and raw)
+                if effective > max_effective:
+                    max_effective = effective
                 effective = 0
                 consecutive = 0
-                shield_bank = 0   # unspent shield is lost when streak breaks
-
+                shield_bank = 0
+                current_segment = 0
         d += timedelta(days=1)
+
+    # After loop, check if current streaks are the longest
+    if effective > max_effective:
+        max_effective = effective
+
+    # Raw current streak: if last segment touches today or yesterday
+    # (raw streak = consecutive good days, no shields)
+    if current_segment > 0:
+        if end_day == today or end_day == today - timedelta(days=1):
+            raw_current = current_segment
 
     return {
         "current_streak":       raw_current,   # raw consecutive good days (no shields)
-        "effective_streak":     effective,      # forward-simulated shield-protected streak
-        "longest_streak":       longest,
+        "effective_streak":     effective,     # shield-protected streak up to today
+        "longest_streak":       max_effective, # shield-protected longest streak
         "shields_earned":       shields_earned,
         "shields_used":         shields_used,
         "shield_used_on_dates": shield_used_on_dates,

@@ -171,7 +171,7 @@ async def home(
             "pct":          steps_pct,
             "step_streak":  step_streak,
         },
-        "challenge": {
+        "step_challenge": {
             "id":          step_challenge_id,
             "rank":        rank,
             "rank_change": rank_change,

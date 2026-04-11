@@ -39,6 +39,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import settings
 from app.models import AiInsight
+from app.services.habits_service import get_streak as _get_habit_streak
 
 logger = logging.getLogger(__name__)
 
@@ -240,13 +241,7 @@ async def _collect_stats(db: AsyncSession, user_id: str) -> dict:
     day_number = (today - h["started_at"]).days + 1 if h.get("started_at") else None
     days_remaining = (h["ends_at"] - today).days if h.get("ends_at") else None
 
-    streak_row = await db.execute(text(
-        "SELECT global_current_streak, global_longest_streak FROM users WHERE id = :uid"
-    ), {"uid": str(user_id)})
-    sr = streak_row.mappings().first() or {}
-    streak = int(sr.get("global_current_streak") or 0)
-    longest = int(sr.get("global_longest_streak") or 0)
-
+    # ── Step challenge: rank + step streak ────────────────────────────────
     rank_row = await db.execute(text("""
         SELECT cp.previous_rank, cp.challenge_current_streak, cp.selected_daily_target
         FROM challenge_participants cp
@@ -258,6 +253,20 @@ async def _collect_stats(db: AsyncSession, user_id: str) -> dict:
     rank = int(cr["previous_rank"]) if cr.get("previous_rank") else None
     step_streak = int(cr.get("challenge_current_streak") or 0)
     daily_target = int(cr.get("selected_daily_target") or 8000)
+
+    # ── Habit streak: live effective streak from shield logic ───────────────
+    habit_challenge_id = int(h["challenge_id"]) if h.get("challenge_id") else None
+    habit_effective_streak = 0
+    habit_longest_streak   = 0
+    habit_raw_streak       = 0
+    if habit_challenge_id:
+        try:
+            sd = await _get_habit_streak(db, habit_challenge_id, str(user_id))
+            habit_effective_streak = sd.get("effective_streak", 0)
+            habit_longest_streak   = sd.get("longest_streak", 0)
+            habit_raw_streak       = sd.get("current_streak", 0)
+        except Exception:
+            pass
     steps_vs_target_pct = round(
         int(s.get("steps_yesterday") or 0) / daily_target * 100
     ) if daily_target else 0
@@ -317,10 +326,11 @@ async def _collect_stats(db: AsyncSession, user_id: str) -> dict:
         "best_habit_this_week":  best["label"] if best else None,
         "weakest_habit":         worst["label"] if worst else None,
         "weakest_habit_days_done": int(worst["done_days"]) if worst else None,
-        "streak_current":        streak,
-        "streak_longest":        longest,
-        "step_streak":           step_streak,
-        "rank":                  rank,
+        "step_streak":              step_streak,
+        "step_rank":                rank,
+        "habit_streak_current":     habit_raw_streak,
+        "habit_streak_effective":   habit_effective_streak,  # shield-protected (use this for display)
+        "habit_streak_longest":     habit_longest_streak,
     }
 
 
@@ -373,11 +383,16 @@ Return ONLY a valid JSON object (no markdown, no code fences) with these four ke
   - Never start with "You"
 
 "detail"
-  A second insight as rich-text spans (max 18 words).
-  - Must name a specific habit OR a time-of-day pattern
-  - Should feel like a coach noticing something the user missed
-  - If there is a gap (missed habit, low step day), mention it with a gentle forward-looking tip
-  - Use "highlight" style for habit names, "stat" for numbers
+  One short, scannable fact (max 12 words total across all spans).
+  Pick the SINGLE most useful number the user can act on today:
+    • Best option: habit completion rate  e.g. "Exercise 30 min — done 5 of 7 days"
+    • Or: steps vs target         e.g. "Averaged 6,200 steps — 78% of your daily target"
+    • Or: streak status           e.g. "Step streak: 4 days — keep it going"
+    • Or: perfect days count      e.g. "2 perfect habit days this week"
+  Rules:
+  - Use "highlight" style for habit names, "stat" for all numbers
+  - NO coaching advice, NO tips, NO forward-looking sentences — just the fact
+  - Must be readable in under 2 seconds
 
 "hook"
   One short sentence (max 12 words) that creates genuine curiosity or stakes for tomorrow.
@@ -393,24 +408,57 @@ Return ONLY a valid JSON object (no markdown, no code fences) with these four ke
 def _build_user_message(stats: dict) -> str:
     has_steps  = stats.get("steps_week", 0) > 0 or stats.get("steps_yesterday", 0) > 0
     has_habits = stats.get("habits_total", 0) > 0
+    step_rank  = stats.get("step_rank")
+    step_streak = stats.get("step_streak", 0)
+    habit_streak = stats.get("habit_streak_effective", 0)
+    habit_pct = stats.get("habit_pct_week", 0)
 
     if has_steps and has_habits:
-        context = "This user tracks BOTH steps and habits."
+        # Guide the AI to lead with the most impressive metric
+        if step_rank and step_rank <= 3:
+            lead = f"Their step ranking is impressive: #{step_rank} on the leaderboard."
+        elif habit_streak >= 7:
+            lead = f"Their habit streak is strong: {habit_streak} days effective."
+        elif step_streak >= 5:
+            lead = f"They are on a {step_streak}-day step streak."
+        elif habit_pct >= 80:
+            lead = f"They completed {habit_pct}% of habits this week."
+        else:
+            lead = "Use the most interesting number from the stats."
+        context = (
+            f"This user tracks BOTH steps and habits. {lead}\n"
+            "Use both step and habit data — lead with whichever is more impressive. "
+            "Reference step_rank when it's strong, habit_streak_effective for habit streak."
+        )
     elif has_steps:
         context = (
             "This user tracks STEPS ONLY — they have no habit challenge. "
             "Do NOT mention habits, habit streaks, or habit counts anywhere. "
-            "Focus entirely on steps, step streak, daily target, and rank."
+            "Focus entirely on steps, step_streak, steps_daily_target, and step_rank."
         )
     else:
         context = (
             "This user tracks HABITS ONLY — they have no step challenge. "
-            "Do NOT mention steps, step streaks, daily step targets, or rank anywhere. "
-            "Focus entirely on habit completions, habit streaks, and perfect days."
+            "Do NOT mention steps, step_streak, daily step targets, or step_rank anywhere. "
+            "Focus entirely on habit_streak_effective, habit completions, and perfect days."
         )
+
+    glossary = (
+        "Data field glossary (use these exact names from the JSON below):\n"
+        "  step_rank                — leaderboard position in the step challenge (1 = best; null = not in one)\n"
+        "  step_streak              — consecutive days user hit their daily step target\n"
+        "  habit_streak_effective   — MAIN habit streak: shield-protected consecutive good habit days (use this)\n"
+        "  habit_streak_current     — raw habit streak (no shield help) — secondary reference\n"
+        "  habit_streak_longest     — best ever shield-protected habit streak\n"
+        "  habit_pct_week           — % of all habits completed across this week\n"
+        "  habit_perfect_days_week  — days this week where ALL habits were done\n"
+        "  steps_*                  — all step-related fields\n"
+        "NEVER confuse step_rank (steps leaderboard) with habit streaks.\n"
+    )
 
     return (
         f"{context}\n\n"
+        f"{glossary}\n"
         "Here are the user's stats for the past 7 days:\n"
         f"{json.dumps(stats, indent=2)}\n\n"
         "Generate the insight JSON now."
@@ -513,7 +561,7 @@ def _fallback(stats: dict) -> dict:
     steps  = stats.get("steps_yesterday", 0)
     done   = stats.get("habits_done_yesterday", 0)
     total  = stats.get("habits_total", 0)
-    streak = stats.get("step_streak", 0) or stats.get("streak_current", 0)
+    streak = stats.get("step_streak", 0) or stats.get("habit_streak_effective", 0)
 
     segments: list = [{"text": f"{steps:,} steps", "style": "stat", "color": "purple"}]
     if total > 0:

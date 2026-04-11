@@ -310,11 +310,11 @@ async def nightly_insight_job():
 
 scheduler.add_job(
     nightly_insight_job,
-    CronTrigger(hour=0, minute=30, timezone="Asia/Kolkata"),
+    CronTrigger(hour=23, minute=37, timezone="Asia/Kolkata"),
     id='nightly_ai_insights',
     replace_existing=True,
 )
-logger.info("Job configured: nightly AI insight generation @ 00:30 IST daily")
+logger.info("Job configured: nightly AI insight generation @ 23:37 IST daily")
 
 # 9. Habit cycle completion summary — 21:00 IST (challenges ending today)
 async def habit_cycle_summary_job():
@@ -327,11 +327,11 @@ async def habit_cycle_summary_job():
 
 scheduler.add_job(
     habit_cycle_summary_job,
-    CronTrigger(hour=21, minute=0, timezone="Asia/Kolkata"),
+    CronTrigger(hour=1, minute=30, timezone="Asia/Kolkata"),
     id='habit_cycle_summary',
     replace_existing=True,
 )
-logger.info("Job configured: habit cycle summary @ 21:00 IST daily")
+logger.info("Job configured: habit cycle summary @ 01:30 IST daily")
 
 # 9. Rank change notifications — 21:30 IST (after step reminders, using day's snapshot)
 # scheduler.add_job(
