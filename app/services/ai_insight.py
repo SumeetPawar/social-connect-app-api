@@ -383,16 +383,23 @@ Return ONLY a valid JSON object (no markdown, no code fences) with these four ke
   - Never start with "You"
 
 "detail"
-  One short, scannable fact (max 12 words total across all spans).
-  Pick the SINGLE most useful number the user can act on today:
-    • Best option: habit completion rate  e.g. "Exercise 30 min — done 5 of 7 days"
-    • Or: steps vs target         e.g. "Averaged 6,200 steps — 78% of your daily target"
-    • Or: streak status           e.g. "Step streak: 4 days — keep it going"
-    • Or: perfect days count      e.g. "2 perfect habit days this week"
+  One scannable line — metric + value + 2–3 word context anchor. Max 12 words total.
+  Formula: [metric] + [number] + [anchor that makes the number meaningful]
+
+  Best anchors (pick whichever fits):
+    "— best this week"  /  "— above your average"  /  "— longest this month"
+    "— 78% of target"   /  "— on track"             /  "— 3 days running"
+
+  Pick the metric closest to a milestone or most surprising in the data:
+    • Habit with highest streak or completion rate this week
+    • Steps average vs daily target
+    • Perfect habit days count vs days elapsed
+    • Step streak vs personal best
+
   Rules:
-  - Use "highlight" style for habit names, "stat" for all numbers
-  - NO coaching advice, NO tips, NO forward-looking sentences — just the fact
-  - Must be readable in under 2 seconds
+  - "highlight" for metric/habit names, "stat" for all numbers, "normal" for anchors
+  - Anchor = context only — never advice ("keep going", "try to", "you should")
+  - If no strong anchor exists, metric + value alone is fine
 
 "hook"
   One short sentence (max 12 words) that creates genuine curiosity or stakes for tomorrow.
