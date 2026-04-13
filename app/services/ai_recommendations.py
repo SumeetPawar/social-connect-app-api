@@ -87,9 +87,12 @@ async def _ask_ai(system: str, user_msg: str) -> str:
                 {"role": "system", "content": system + "\nRespond in valid JSON."},
                 {"role": "user",   "content": user_msg},
             ],
-            max_completion_tokens=1200,
+            max_completion_tokens=3000,
             response_format={"type": "json_object"},
         )
+        finish_reason = response.choices[0].finish_reason
+        if finish_reason == "length":
+            logger.warning("_ask_ai: Azure response truncated (finish_reason=length) — increase max_completion_tokens")
         return response.choices[0].message.content or "{}"
 
     else:  # anthropic
@@ -98,8 +101,7 @@ async def _ask_ai(system: str, user_msg: str) -> str:
         client = AsyncAnthropic()
         async with client.messages.stream(
             model="claude-opus-4-6",
-            max_tokens=1200,
-            thinking={"type": "adaptive"},
+            max_tokens=3000,
             system=system,
             messages=[{"role": "user", "content": user_msg}],
         ) as stream:
@@ -112,118 +114,202 @@ async def _ask_ai(system: str, user_msg: str) -> str:
 # ══════════════════════════════════════════════════════════════════════════════
 
 _BODY_SYSTEM = """\
-You are a personal body coach inside a wellness app — the kind that tells you
-exactly where you stand and what ONE thing will move the needle.
+You are the health coach inside a wellness app. You just reviewed this user's body scan.
+Your job: tell them exactly what you see, what it means for their daily life, and the ONE thing
+that will move their numbers — so clearly they act on it today, not someday.
 
-VOICE — this is the most important rule:
-  Write like a coach sending a voice note. Short sentences. Plain words.
-  Never say "cardiovascular", "metabolic risk", "insulin sensitivity" — say
-  "raises your risk of heart disease", "slows your metabolism", "spikes blood sugar".
-  Numbers feel real — always quote them: "Level 14", "29.4%", not "elevated" or "high".
-  When something is good → celebrate it like it matters.
-  When something needs work → be honest, not alarming.
-  The user should WANT to re-open this every time they scan.
+═══ HOW TO WRITE ═══
+Talk like a knowledgeable friend, not a clinic report.
+• Short sentences. Everyday words. Zero jargon.
+  NEVER write: "cardiovascular", "visceral adiposity", "insulin", "glycaemic", "adipose tissue".
+  Simplify explanations but NEVER rename metrics — always use the exact scanner metric name:
+    "Visceral fat" (not belly fat), "Body fat %", "Skeletal muscle %", "BMR", "Metabolic age".
+  Plain alternatives for explanations only (not metric names):
+    metabolic → "how your body burns fuel" | cardiovascular → "your heart and blood vessels"
+    blood sugar spike → "your body stores the extra as fat"
+• Use their exact numbers every time. "Level 14" not "high". "31%" not "low".
+• Connect every metric to real life — energy, how clothes fit, how they feel in the morning.
+• Explain what visceral fat IS in plain terms when relevant:
+    "Visceral fat sits around your organs — high levels slow your metabolism and drain your energy."
+• No fear. No doom. Every sentence ends pointing forward.
+• If a habit caused a change → say it directly: "Your walk habit brought visceral fat from Level 14 to 12."
 
-REFERENCE RANGES (use internally to grade status — translate to plain English in output):
-  Body fat %   Men: great ≤17% | ok 18-24% | too high 25%+
-               Women: great ≤24% | ok 25-31% | too high 32%+
-  Visceral fat (1-30 scale):  ≤9 = healthy | 10-14 = too high | 15+ = urgent
-  Skeletal muscle %  Men: low <33% | normal 33-39% | strong 39%+
-                     Women: low <24% | normal 24-30% | strong 30%+
-  BMR: high BMR + high fat = real muscle hiding under the fat — that's an asset.
-  Metabolic age: same or lower than real age = great. 5+ years older = needs work.
+═══ HEALTHY RANGES ═══
+"ideal_ranges" in the input is pre-computed for this user's exact age, gender, activity level,
+and height. Each key = [low, high]. Outside either end = needs attention.
+Special case: high BMR + high body fat = strong muscle under the fat. Call it an asset.
 
-HABIT → METRIC LOOKUP (use this to connect the #1 metric concern to behaviour):
-  visceral fat too high  → "Walk after meals" (20 min after dinner = fastest visceral fat fix)
-  body fat too high      → "Protein per meal" or "Fill half plate with veg" or resistance training habit
-  muscle too low         → Any strength / resistance training habit
-  hydration too low      → Water / hydration habit
-  metabolic age too high → Steps + diet quality + sleep habits combined
+═══ READ THE HABIT DATA ═══
+"active_habits" = what they're doing now. pct_window = how consistently, over the last 15 days.
+"habit_library" = all available in-app habits (slug, label, impact, category).
 
-HABIT STATE RULES:
-  Active habit, done >70% of days → REINFORCE: "Your [habit] is working. Don't stop."
-  Active habit, done <70% of days → CONSISTENCY GAP: "You have the right habit. Log it every day — that's what moves the number."
-  Habit NOT active at all → RECOMMEND: Frame it as the #1 unlock, not a chore.
-    Make it exciting: "This one habit is your fastest route to [improvement]."
-    Be specific: name the habit, the duration, the frequency.
-    End with: "Add it to your next habits challenge."
+For the user's #1 concern, pick exactly ONE response:
+  WIN    — habit ≥70% done + metric improved   → celebrate + credit the habit explicitly
+  HOLD   — habit ≥70% done + metric unchanged  → encourage: "right habit, give it more time"
+  PUSH   — habit active but <70% done          → be honest: "you have the right habit — log it every day"
+  UNLOCK — no relevant habit active at all     → prescribe the single best action for this metric
 
-Return ONLY valid JSON (no markdown, no code fences) with exactly these five keys:
+═══ WHAT WORKS (use your full knowledge) ═══
+Draw on research. Translate everything into plain language. Examples:
+
+Visceral fat too high:
+  Walk 20 min after your biggest meal — steadies blood sugar, visceral fat responds fastest to this
+  Eat within a 10–12 hour window — gives the body time overnight to burn stored fat
+  Strength training 3×/week — muscle built this way burns visceral fat around the clock
+  Cut heavy carbs at dinner — the body stores more fat from carbs eaten late at night
+
+Body fat too high:
+  Protein at every meal — keeps hunger down, preserves muscle while losing fat
+  Strength training 3×/week — more muscle = more fat burned even doing nothing
+  Sleep 7–9 hours — bad sleep makes you hungrier and slows fat burning the next day
+  Vegetables first, half the plate — naturally cuts how much you eat without counting calories
+
+Muscle too low:
+  Lift weights or bodyweight training 3–4×/week — the only proven way to build muscle
+  Protein at every meal — muscles cannot grow without it
+  8+ hours sleep — most muscle repair happens overnight
+
+Metabolic age too high:
+  Short intense exercise 2×/week (10–20 min) — fastest way to turn back the clock
+  Cold shower 2–3 min — forces the body to burn energy to warm up, wakes up fat cells
+  7,000–10,000 steps every day — the single biggest lever for metabolic age
+
+Hydration too low:
+  Full glass of water before every meal — easiest habit, biggest hydration impact
+  Pinch of salt in morning water — helps the body actually hold and use the water
+
+Return ONLY valid JSON — no markdown, no code fences.
 
 ─── SPAN FORMAT ───
-Every rich-text field = array of { "text": "...", "style": "...", "color": "..." }
+Rich-text fields = array of { "text": str, "style": str, "color": str|null }
   style: "normal" | "stat" | "highlight" | "bold"
   color: "green" | "rose" | "orange" | "purple" | "teal" | null
-  Spans join with no gap — add a space at the START or END of normal spans between styled ones.
+  No gaps between spans — put spaces inside the text strings where needed.
 
-─── OUTPUT KEYS ───
+─── OUTPUT ───
 
-"summary"
-  ≤2 sentences, ≤25 words total. The one thing that matters most right now.
-  If a habit is active and working → say so. If the key habit is missing → hint that one change unlocks progress.
-  Must include ≥1 "stat" span and ≥1 "highlight" span.
-  Tone examples:
-    Visceral fat 14, NO walk habit:
-      [{"text":"Visceral fat is at ","style":"normal","color":null},{"text":"Level 14","style":"stat","color":"orange"},{"text":" — one new habit could start bringing this down.","style":"normal","color":null}]
-    Visceral fat 14, walk habit active 6/7:
-      [{"text":"Visceral fat sits at ","style":"normal","color":null},{"text":"Level 14","style":"stat","color":"orange"},{"text":" — your ","style":"normal","color":null},{"text":"Walk after meals","style":"highlight","color":"teal"},{"text":" habit is the right move. Keep going.","style":"normal","color":null}]
-    Visceral fat dropped:
-      [{"text":"Visceral fat down ","style":"normal","color":null},{"text":"2 levels","style":"stat","color":"green"},{"text":" — your ","style":"normal","color":null},{"text":"Walk after meals","style":"highlight","color":"green"},{"text":" habit is paying off.","style":"normal","color":null}]
+"headline"
+  ≤8 words. One specific, honest finding. Hook the user immediately.
+  Something improved → "Visceral fat down 2 levels — walk habit is working"
+  Concern, no habit → "Visceral fat at Level 14 — one habit can change this"
+  Concern, habit exists → "Right habit — now log it every single day"
+  Plain string. No spans.
+
+"story"
+  3 sentences, ≤50 words total.
+  S1 — The #1 metric: exact value, change since last scan if available.
+  S2 — What it means for daily life right now (energy, strength, how clothes fit — never disease).
+  S3 — WIN/HOLD/PUSH: credit or push the habit. UNLOCK: "one habit can start changing this in X weeks."
+  Rich text spans. Must include ≥1 "stat" span (numbers) and ≥1 "highlight" or "bold" span (habit/metric names).
 
 "highlights"
-  2-4 metric cards. Most urgent first, then biggest wins, then stable.
+  2–4 cards. Most urgent first, then wins, then stable.
   {
-    "metric":    str  — "Visceral fat" | "Body fat" | "Muscle mass" | "BMR" | "Hydration"
+    "metric":    "Visceral fat" | "Body fat" | "Skeletal muscle" | "BMR" | "Hydration" | "Weight" | "Metabolic age"
     "direction": "up" | "down" | "stable"
-    "value":     str  — exact value with unit: "Level 14", "29.4%", "1 865 kcal"
-    "delta":     str|null  — e.g. "-2 levels", "-1.4%", null if only 1 scan
+    "value":     exact value with unit — "Level 14", "29.4%", "1 865 kcal"
+    "delta":     change vs first scan — "-2 levels", "+1.4%", null if only 1 scan
     "priority":  "high" | "medium" | "low"
-    "note":      rich text, ≤15 words — plain English: where are they vs healthy + what it means OR habit link
+    "note":      rich text ≤12 words — where they stand + one plain-English implication or habit link
   }
-  Skip null-value metrics.
-  Note tone examples (plain + habit-aware):
-    Visceral fat 14, walk habit 5/7:
-      [{"text":"Above healthy (limit is 12)","style":"bold","color":"orange"},{"text":" — your walk habit is already on it.","style":"normal","color":null}]
-    Visceral fat 14, NO habit:
-      [{"text":"Above healthy (limit is 12)","style":"bold","color":"orange"},{"text":" — a post-meal walk is the fastest fix.","style":"normal","color":null}]
-    Body fat 29.4%, man:
-      [{"text":"Above the fit zone for men","style":"bold","color":"orange"},{"text":" — each % off boosts your energy noticeably.","style":"normal","color":null}]
-    Muscle 29.7%, man:
-      [{"text":"Below normal for men (33%)","style":"bold","color":"orange"},{"text":" — 6-8 weeks of strength habits will shift this.","style":"normal","color":null}]
-    BMR 1865, high fat:
-      [{"text":"Strong resting burn","style":"bold","color":"green"},{"text":" — good muscle under the fat. Real asset.","style":"normal","color":null}]
-  Colors: fat/visceral up → orange/rose | muscle/hydration up → green | stable+ok → teal | stable+concern → orange
+  Omit metrics with null values.
+  note color: concern/rising → orange or rose | improving → green | healthy/stable → teal | stable+concern → orange
 
-"warning"
-  null if nothing urgent.
-  If needed: ≤15 words, calm + specific. Use "orange" (mild) or "rose" (significant).
-  Triggers: visceral fat >12 | metabolic age >bio age+5 | body fat in the too-high zone.
-  Example:
-    [{"text":"Visceral fat at Level 14","style":"highlight","color":"orange"},{"text":" raises your risk of heart disease over time.","style":"normal","color":null}]
+"focus"
+  The ONE action that matters most right now. ≤18 words. Starts with a verb.
+  WIN:    "Keep [habit] going every day — it's directly moving your [metric]."
+  HOLD:   "Keep [habit] going. The number will shift — it needs 4–6 more weeks."
+  PUSH:   "Log [habit] every single day this week. That's the only thing that moves [metric]."
+  UNLOCK: Exact action — what, how long, how often. From library or your own knowledge.
+  Key action words → color "teal". Metric name → style "highlight".
 
-"action"
-  The #1 behaviour change that will move the needle. ≤20 words. Punchy. Specific.
-  Must name WHAT, HOW OFTEN, and HOW LONG / HOW MUCH.
-  HABIT-AWARE:
-    Habit active >70% → reinforce it (don't give new advice, celebrate what's working)
-    Habit active <70% → "You have the right habit. Log it every single day this week."
-    No habit active → make it sound like an exciting unlock, not a chore:
-      "Add 'Walk after meals' to your next challenge — 20 min after dinner, every day."
-  Start with a verb. Action text in "teal". Target metric in "highlight".
-  Examples:
-    [{"text":"Keep your ","style":"normal","color":"teal"},{"text":"Walk after meals","style":"highlight","color":"teal"},{"text":" habit going — it's directly chipping away at ","style":"normal","color":null},{"text":"visceral fat","style":"highlight","color":"orange"},{"text":".","style":"normal","color":null}]
-    [{"text":"Add ","style":"normal","color":"teal"},{"text":"Walk after meals","style":"highlight","color":"teal"},{"text":" to your next challenge — 20 min after dinner targets ","style":"normal","color":null},{"text":"visceral fat","style":"highlight","color":"orange"},{"text":" fastest.","style":"normal","color":null}]
+"next_milestone"
+  Plain string ≤15 words. What the NEXT scan will show if they act on focus now.
+  Specific. Tied to their numbers. Creates a reason to scan again.
+  "Keep the walk habit — next scan could show visceral fat at Level 12."
+  "Log protein every day — next scan will show muscle holding or growing."
 
-"habit_nudge"
-  Plain string only (no spans). Max 20 words. Shown as a banner/button in the UI.
-  null if:  habit is active AND completion >70%  OR  metric is improving with habit active.
-  Otherwise:
-    Habit active but <70%: short kick — "You have the right habit. Log it every day this week."
-    No habit active: frame as the #1 unlock — exciting, not guilt-inducing:
-      "Add 'Walk after meals' to your next challenge — it's your fastest route to Level 9."
-      "Start 'Protein per meal' next cycle — the single best move for your body fat right now."
-  Always end with a clear action: "Add it to your next habits challenge."
+"suggested_habits"
+  1–3 habits prescribed for this person based on their actual scan numbers.
+  You are NOT limited to habit_library — recommend whatever is most effective.
+  Use library habits when they fit (reference by exact label). Add new ones when they don't.
+  Make each feel necessary, not optional. Their numbers give you leverage — use it.
+  [
+    {
+      "name":       short verb-first name — "Walk after dinner", "Sleep by 10pm", "Protein at every meal"
+      "in_library": true if the habit's slug exists in habit_library, else false
+      "slug":       matching slug from library, or null
+      "category":   "nutrition" | "fitness" | "wellness" | "sleep" | "mindset"
+      "frequency":  "daily" | "3×/week" | "weekly" | etc.
+      "duration":   "20 min" | "10 min" | null if not time-based
+
+      "why": ONE sentence. Their actual number + what this habit does to it + how fast.
+        ✓ "Your visceral fat is at Level 14 — a 20-min walk after dinner is the fastest way to bring it down."
+        ✓ "Your muscle is at 31%, below the healthy range — lifting 3×/week will shift this in 6 weeks."
+        ✗ "This supports overall health." (no number, no impact, no urgency)
+
+      "urgency": ONE sentence. Make them feel the cost of waiting — or the thrill of being close.
+        "Every week without this, visceral fat stays at Level 14 — or goes higher."
+        "Two consistent weeks and your next scan will look noticeably different."
+        "You are one habit away from visceral fat starting to drop."
+        Always tied to their actual number. Never generic.
+
+      "first_step": The exact thing they should do TODAY. Concrete. Immediate. No vagueness.
+        ✓ "After dinner tonight, put your shoes on and walk for 20 minutes."
+        ✓ "At your next meal, add an egg or a handful of nuts before anything else."
+        ✓ "Tonight, set a 10pm alarm — that's your sleep start. Stick to it."
+        This is the most important field. It turns intent into action.
+    }
+  ]
 """
+
+
+def _compute_ideal_ranges(age: int | None, gender: str | None,
+                          activity: str | None,
+                          height_cm: float | None, weight_kg: float | None) -> dict:
+    """
+    Mirror of frontend computeRanges — age/gender/activity-adjusted healthy ranges.
+    Returns the same structure the UI uses so AI analysis is consistent.
+    """
+    age      = age or 30
+    h        = (height_cm or 170) / 100
+    w        = weight_kg or 70
+    is_male  = (gender or "").lower() in ("male", "m")
+
+    # BMI / weight
+    bmi_ideal = (20.0, 24.9) if age > 60 else (18.5, 22.9)
+    act_bonus = {"athlete": 2.5, "active": 1.5, "moderate": 0.5}.get(activity or "", 0.0)
+    weight_range = (round(bmi_ideal[0] * h * h, 1),
+                    round((bmi_ideal[1] + act_bonus) * h * h, 1))
+
+    # Body fat %
+    if is_male:
+        fat = (10, 19) if age < 40 else (11, 21) if age < 60 else (13, 24)
+    else:
+        fat = (20, 28) if age < 40 else (21, 30) if age < 60 else (22, 33)
+
+    # BMR — Mifflin-St Jeor
+    bmr_base = (10*w + 6.25*(height_cm or 170) - 5*age + (5 if is_male else -161))
+    bmr_range = (round(bmr_base * 0.92), round(bmr_base * 1.08))
+
+    # Metabolic age ideal: [age-10, age] (not older than real age)
+    mage_range = (max(18, age - 10), max(19, age))
+
+    # Skeletal muscle %
+    if is_male:
+        skel = (33, 39) if age < 40 else (31, 37) if age < 60 else (29, 35)
+    else:
+        skel = (24, 30) if age < 40 else (23, 29) if age < 60 else (21, 27)
+
+    return {
+        "weight_kg":           list(weight_range),
+        "bmi":                 list(bmi_ideal),
+        "body_fat_pct":        list(fat),
+        "visceral_fat":        [1, 9],
+        "bmr_kcal":            list(bmr_range),
+        "metabolic_age":       list(mage_range),
+        "skeletal_muscle_pct": list(skel),
+    }
 
 
 async def _collect_body_stats(db: AsyncSession, user_id: str) -> dict | None:
@@ -237,33 +323,38 @@ async def _collect_body_stats(db: AsyncSession, user_id: str) -> dict | None:
     if len(scans) < 1:
         return None
 
-    # Fetch user profile for gender/age context (needed for range comparisons)
+    # Fetch user profile for gender/age/height context
     user_row = await db.execute(select(User).where(User.id == user_id))
     user = user_row.scalar_one_or_none()
-    user_gender = getattr(user, "gender", None) if user else None
-    user_age    = getattr(user, "age",    None) if user else None
+    user_gender   = getattr(user, "gender",         None) if user else None
+    user_age      = getattr(user, "age",             None) if user else None
+    user_activity = getattr(user, "activity_level",  None) if user else None
+    user_height   = float(getattr(user, "height_cm", None) or 0) or None
 
     # Fetch active habits (name + 7-day completion %) to connect behaviour to metrics
+    # Use 15-day window to match typical scan cadence (scans every ~15 days)
+    habit_window_days = 15
+    habit_window_start = date.today() - timedelta(days=habit_window_days - 1)
     habit_rows = await db.execute(text("""
         SELECT
             hb.slug,
             hb.label,
             hb.category,
-            COUNT(dl.id) FILTER (WHERE dl.completed AND dl.logged_date >= :week_start) AS done_7d
+            COUNT(dl.id) FILTER (WHERE dl.completed AND dl.logged_date >= :window_start) AS done_window
         FROM habit_challenges hc
         JOIN habit_commitments hcm ON hcm.challenge_id = hc.id
         JOIN habits hb ON hb.id = hcm.habit_id
         LEFT JOIN daily_logs dl ON dl.commitment_id = hcm.id
         WHERE hc.user_id = :uid AND hc.status = 'active'
         GROUP BY hb.slug, hb.label, hb.category
-    """), {"uid": str(user_id), "week_start": date.today() - timedelta(days=6)})
+    """), {"uid": str(user_id), "window_start": habit_window_start})
     active_habits = [
         {
-            "slug":       r["slug"],
-            "label":      r["label"],
-            "category":   r["category"],
-            "done_7d":    int(r["done_7d"] or 0),
-            "pct_7d":     round(int(r["done_7d"] or 0) / 7 * 100),
+            "slug":         r["slug"],
+            "label":        r["label"],
+            "category":     r["category"],
+            "done_window":  int(r["done_window"] or 0),
+            "pct_window":   round(int(r["done_window"] or 0) / habit_window_days * 100),
         }
         for r in habit_rows.mappings().all()
     ]
@@ -275,6 +366,17 @@ async def _collect_body_stats(db: AsyncSession, user_id: str) -> dict | None:
         WHERE user_id = :uid AND day >= :week_start
     """), {"uid": str(user_id), "week_start": date.today() - timedelta(days=6)})
     avg_steps_7d = int((steps_row.scalar() or 0))
+
+    # Fetch full habit library so AI can match habits to metrics dynamically
+    from app.models import Habit
+    lib_rows = await db.execute(
+        select(Habit.slug, Habit.label, Habit.impact, Habit.category)
+        .order_by(Habit.category, Habit.label)
+    )
+    habit_library = [
+        {"slug": r.slug, "label": r.label, "impact": r.impact, "category": str(r.category)}
+        for r in lib_rows.all()
+    ]
 
     def _f(v):
         return float(v) if v is not None else None
@@ -317,14 +419,21 @@ async def _collect_body_stats(db: AsyncSession, user_id: str) -> dict | None:
             "hydration_pct":       _delta("hydration_pct"),
         },
         "days_tracked": (scans[-1].recorded_date - scans[0].recorded_date).days,
-        # User profile — critical for gender/age-specific healthy range comparisons
         "user_profile": {
-            "gender": user_gender,
-            "age":    user_age,
+            "gender":         user_gender,
+            "age":            user_age,
+            "activity_level": user_activity,
         },
-        # Behaviour context — connect body metrics to what they're actually doing
-        "active_habits": active_habits,   # [{slug, label, category, done_7d, pct_7d}]
-        "avg_steps_7d":  avg_steps_7d,    # activity level proxy
+        # Pre-computed healthy ranges matching frontend logic — AI must use these, not hardcoded values
+        "ideal_ranges": _compute_ideal_ranges(
+            user_age, user_gender, user_activity,
+            user_height, latest.get("weight_kg"),
+        ),
+        "active_habits":     active_habits,
+        "habit_window_days": habit_window_days,
+        "avg_steps_7d":      avg_steps_7d,
+        # Full habit library — AI uses this to suggest habits by name and match to metrics
+        "habit_library":     habit_library,
     }
 
 
@@ -355,10 +464,13 @@ def _fallback_body(stats: dict) -> dict:
     sm = latest.get("skeletal_muscle_pct")
     n  = stats.get("total_scans", 1)
     return {
-        "summary": [
-            _span(f"{n} scan{'s' if n > 1 else ''} logged — ", "normal"),
-            _span("here's your body composition snapshot", "bold"),
-            _span(".", "normal"),
+        "headline": "Your baseline is logged",
+        "story": [
+            _span(f"You have ", "normal"),
+            _span(f"{n} scan{'s' if n > 1 else ''}", "stat", "teal"),
+            _span(" on record — your body composition baseline is set. ", "normal"),
+            _span("Scan every 14 days", "highlight", "teal"),
+            _span(" to start seeing real trends and personalised insights.", "normal"),
         ],
         "highlights": [
             {
@@ -367,7 +479,7 @@ def _fallback_body(stats: dict) -> dict:
                 "value":     f"{bf}%" if bf else "—",
                 "delta":     None,
                 "priority":  "medium",
-                "note":      [_span("Current baseline — log more scans to see trends.", "normal")],
+                "note":      [_span("Baseline logged — scan again in 14 days to see change.", "normal")],
             },
             {
                 "metric":    "Skeletal muscle",
@@ -375,16 +487,16 @@ def _fallback_body(stats: dict) -> dict:
                 "value":     f"{sm}%" if sm else "—",
                 "delta":     None,
                 "priority":  "low",
-                "note":      [_span("Strength foundation — keep training consistently.", "normal")],
+                "note":      [_span("Keep training — next scan will show the difference.", "normal")],
             },
         ],
-        "warning": None,
-        "action": [
-            _span("Log scans ", "normal"),
-            _span("monthly", "highlight", "teal"),
-            _span(" to unlock personalised trend insights.", "normal"),
+        "focus": [
+            _span("Scan again in ", "normal"),
+            _span("14 days", "highlight", "teal"),
+            _span(" — that's when trends become visible.", "normal"),
         ],
-        "habit_nudge": None,
+        "next_milestone":   "Scan in 14 days to unlock your first trend insight.",
+        "suggested_habits": [],
     }
 
 
@@ -418,17 +530,43 @@ async def get_body_insight(db: AsyncSession, user_id: str) -> dict | None:
                 "note":      _validate_spans(h.get("note", [])),
             })
 
-        warning_raw = data.get("warning")
+        # Validate suggested_habits array
+        valid_cats = {"nutrition", "fitness", "wellness", "sleep", "mindset"}
+        suggested_habits = []
+        for sh in (data.get("suggested_habits") or []):
+            if isinstance(sh, dict) and sh.get("name"):
+                suggested_habits.append({
+                    "name":       str(sh.get("name", "")),
+                    "in_library": bool(sh.get("in_library", False)),
+                    "slug":       str(sh["slug"]) if sh.get("slug") else None,
+                    "category":   str(sh.get("category")) if sh.get("category") in valid_cats else "wellness",
+                    "frequency":  str(sh.get("frequency", "daily")),
+                    "duration":   str(sh["duration"]) if sh.get("duration") else None,
+                    "why":        str(sh.get("why", "")),
+                    "urgency":    str(sh.get("urgency", "")),
+                    "first_step": str(sh.get("first_step", "")),
+                })
+
         payload = {
-            "summary":      _validate_spans(data.get("summary", [])),
-            "highlights":   highlights,
-            "warning":      _validate_spans(warning_raw) if warning_raw else None,
-            "action":       _validate_spans(data.get("action", [])),
-            "habit_nudge":  str(data["habit_nudge"]) if data.get("habit_nudge") else None,
+            "headline":         str(data.get("headline", "")),
+            "story":            _validate_spans(data.get("story", [])),
+            "highlights":       highlights,
+            "focus":            _validate_spans(data.get("focus", [])),
+            "next_milestone":   str(data.get("next_milestone", "")),
+            "suggested_habits": suggested_habits,
         }
+
+        # Guard: if AI returned empty content, don't cache bad data
+        if not payload["headline"] or not highlights:
+            logger.warning(f"Body insight AI returned empty output for user {user_id} — raw: {data}")
+            return _fallback_body(stats)  # return but do NOT save to cache
+
+    except json.JSONDecodeError as e:
+        logger.error(f"Body insight JSON parse error for user {user_id}: {e}")
+        return _fallback_body(stats)
     except Exception as e:
         logger.error(f"Body insight AI error for user {user_id}: {e}", exc_info=True)
-        payload = _fallback_body(stats)
+        return _fallback_body(stats)
 
     await _save(db, user_id, "body_insight", payload, stats)
     return {**payload, "generated_at": datetime.now(timezone.utc).isoformat(), "cached": False}

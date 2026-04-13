@@ -1286,3 +1286,81 @@ async def send_test_notification_to_user(db: AsyncSession):
     if _test_msg_index >= len(_ALL_SAMPLE_MESSAGES):
         logger.info("TEST: all sample messages sent — cycle complete, resetting index.")
         _test_msg_index = 0
+
+
+# ─── 11. Body scan reminder (8:00 AM daily) ──────────────────────────────────
+#
+# Decision rules:
+#   days_since = today - last_scan_date
+#   days_since == 14          → "Time to measure" (first reminder, exact day)
+#   days_since  > 14
+#     AND (days_since - 14) % 3 == 0  → "You're overdue" (every 3 days until they scan)
+#
+# This means a user who never scans again gets nudged on day 14, 17, 20, 23 ...
+# Capped at 60 days since last scan to avoid pestering long-inactive users.
+
+_BODY_SCAN_DUE_POOL = [
+    ("Time to check in 📊", "It's been 2 weeks — a quick scan will show how your habits are moving the numbers."),
+    ("Ready for your scan? 📊", "2 weeks is the sweet spot. Log your body metrics today to track real progress."),
+    ("Scan day 📊", "Your last scan was 14 days ago. 2 minutes and you'll see exactly where you stand."),
+]
+
+_BODY_SCAN_OVERDUE_POOL = [
+    ("Your body scan is overdue", "It's been a while since your last scan. Grab your scale and log your metrics today."),
+    ("Missing your scan data 📊", "Trends only show up when you measure. Log your body metrics — it takes 2 minutes."),
+    ("Check in on your progress", "Your habits are working — find out how in your body metrics scan."),
+]
+
+
+async def send_body_scan_reminders(db: AsyncSession):
+    """
+    8:00 AM daily.
+    Notifies users who are due (14 days) or overdue (>14 days, every 3-day interval up to 60 days)
+    for their next body composition scan.
+    """
+    logger.info("JOB: body scan reminder")
+    today = date.today()
+    notified = 0
+
+    rows = await db.execute(text("""
+        SELECT
+            u.id              AS user_id,
+            u.name,
+            MAX(bm.recorded_date) AS last_scan
+        FROM users u
+        JOIN body_metrics bm ON bm.user_id = u.id
+        JOIN push_subscriptions ps ON ps.user_id = u.id
+        GROUP BY u.id, u.name
+        HAVING MAX(bm.recorded_date) < :today
+    """), {"today": today})
+
+    for row in rows.mappings():
+        try:
+            days_since = (today - row["last_scan"]).days
+            if days_since > 60:
+                continue  # too long inactive — stop pestering
+            if days_since == 14:
+                pool = _BODY_SCAN_DUE_POOL
+            elif days_since > 14 and (days_since - 14) % 3 == 0:
+                pool = _BODY_SCAN_OVERDUE_POOL
+            else:
+                continue  # not a reminder day
+
+            if not await _try_claim_push_slot(db, row["user_id"]):
+                continue
+
+            name = (row["name"] or "there").split()[0]
+            title_tpl, body_tpl = random.choice(pool)
+            subs = await _get_subscriptions(db, row["user_id"])
+            sent = await _push_all(db, subs, {
+                "title": title_tpl.format(name=name),
+                "body":  body_tpl.format(name=name),
+                "url":   "/socialapp/body-metrics",
+            })
+            if sent:
+                notified += 1
+        except Exception as e:
+            logger.error(f"Body scan reminder error for user {row['user_id']}: {e}")
+
+    logger.info(f"Body scan reminder: notified {notified} users")
+    return notified

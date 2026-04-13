@@ -4,10 +4,10 @@ from openai import AsyncAzureOpenAI
 
 async def main():
 
-    endpoint = "https://sumee-mnj0fhty-eastus2.cognitiveservices.azure.com/"
-    api_key = "4h6PYHUxQeAqFHmCG0DGdxLt1nWyweQDFuXRytL5jPIFd4hoP3sJQQJ99CDACHYHv6XJ3w3AAAAACOG7hB7"
-    api_version = "2025-04-01-preview"
-    deployment = "gpt-5.3-chat"
+    endpoint = os.environ["AZURE_OPENAI_ENDPOINT"]
+    api_key = os.environ["AZURE_OPENAI_API_KEY"]
+    api_version = os.environ.get("AZURE_OPENAI_API_VERSION", "2025-04-01-preview")
+    deployment = os.environ.get("AZURE_OPENAI_DEPLOYMENT", "gpt-5.3-chat")
 
     client = AsyncAzureOpenAI(
         azure_endpoint=endpoint,

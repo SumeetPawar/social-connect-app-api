@@ -13,6 +13,7 @@ from app.services.reminder_service import (
     send_weekly_summary,
     send_rank_change_notifications,
     send_habit_cycle_summary,
+    send_body_scan_reminders,
 )
 from app.services.ai_insight import generate_nightly_insights
 import logging
@@ -369,6 +370,24 @@ scheduler.add_job(
     replace_existing=True,
 )
 logger.info("Job configured: monthly challenge creation @ 23:55 last day of month")
+
+# 11. Body scan reminder — 08:00 IST daily
+# Fires on day 14 (due) and every 3 days after (overdue) up to day 60
+async def body_scan_reminder_job():
+    async with AsyncSessionLocal() as db:
+        try:
+            await send_body_scan_reminders(db)
+        except Exception as e:
+            logger.error(f"Error in body scan reminder job: {e}", exc_info=True)
+
+
+scheduler.add_job(
+    body_scan_reminder_job,
+    CronTrigger(hour=8, minute=0, timezone="Asia/Kolkata"),
+    id='body_scan_reminder',
+    replace_existing=True,
+)
+logger.info("Job configured: body scan reminder @ 08:00 IST daily")
 
 # scheduler.add_job(
 #     _test_notification_job,
