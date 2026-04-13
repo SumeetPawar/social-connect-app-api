@@ -395,12 +395,18 @@ async def get_challenge_leaderboard(
                 cp.selected_daily_target,
                 cp.challenge_current_streak,
                 cp.challenge_longest_streak,
+                cp.previous_rank                                          AS stored_previous_rank,
+                cp.previous_consistency_rank                              AS stored_prev_consistency_rank,
                 COALESCE(SUM(ds.steps), 0)                               AS total_steps,
                 COALESCE(SUM(CASE WHEN ds.day <= :yesterday THEN ds.steps ELSE 0 END), 0) AS yesterday_steps,
                 COALESCE(AVG(ds.steps), 0)                               AS avg_steps,
                 COUNT(DISTINCT ds.day) FILTER (
                     WHERE ds.steps >= cp.selected_daily_target
                 )                                                         AS days_met_goal,
+                COUNT(DISTINCT ds.day) FILTER (
+                    WHERE ds.steps >= cp.selected_daily_target
+                      AND ds.day <= :yesterday
+                )                                                         AS yesterday_days_met_goal,
                 COUNT(DISTINCT ds.day)                                    AS days_logged
             FROM challenge_participants cp
             JOIN users u ON u.id = cp.user_id
@@ -411,7 +417,8 @@ async def get_challenge_leaderboard(
             WHERE cp.challenge_id = :challenge_id
               AND cp.left_at IS NULL
             GROUP BY cp.user_id, u.name, cp.selected_daily_target,
-                     cp.challenge_current_streak, cp.challenge_longest_streak
+                     cp.challenge_current_streak, cp.challenge_longest_streak,
+                     cp.previous_rank, cp.previous_consistency_rank
         ),
         ranked AS (
             SELECT
@@ -420,6 +427,8 @@ async def get_challenge_leaderboard(
                 selected_daily_target                                      AS goal,
                 challenge_current_streak                                   AS streak,
                 challenge_longest_streak                                   AS longest_streak,
+                stored_previous_rank,
+                stored_prev_consistency_rank,
                 total_steps,
                 yesterday_steps,
                 avg_steps,
@@ -429,23 +438,29 @@ async def get_challenge_leaderboard(
                      THEN ROUND((days_met_goal::numeric / :total_days) * 100, 1)
                      ELSE 0
                 END                                                        AS completion_pct,
-                RANK() OVER (ORDER BY total_steps DESC, name ASC)         AS rank,
-                RANK() OVER (ORDER BY yesterday_steps DESC, name ASC)     AS yesterday_rank
+                CASE WHEN :total_days > 0
+                     THEN ROUND((yesterday_days_met_goal::numeric / :total_days) * 100, 1)
+                     ELSE 0
+                END                                                        AS yesterday_completion_pct,
+                ROW_NUMBER() OVER (ORDER BY total_steps DESC, user_id ASC) AS rank
             FROM user_totals
         )
         SELECT
             rank,
-            yesterday_rank,
+            stored_previous_rank,
+            stored_prev_consistency_rank,
             user_id,
             name,
             goal,
             streak,
             longest_streak,
             total_steps,
+            yesterday_steps,
             avg_steps,
             days_met_goal,
             days_logged,
-            completion_pct
+            completion_pct,
+            yesterday_completion_pct
         FROM ranked
         ORDER BY rank, name ASC
         LIMIT 100
@@ -494,17 +509,27 @@ async def get_challenge_leaderboard(
     )
     user_id_to_consistency_rank = {str(u['user_id']): idx + 1 for idx, u in enumerate(sorted_by_consistency)}
 
+    sorted_by_consistency_yesterday = sorted(
+        leaderboard_data,
+        key=lambda u: (-float(u['yesterday_completion_pct']), -u['yesterday_steps'])
+    )
+    user_id_to_prev_consistency_rank = {str(u['user_id']): idx + 1 for idx, u in enumerate(sorted_by_consistency_yesterday)}
+
     for user in leaderboard_data:
         # Get initials
         name_parts = user['name'].split() if user['name'] else ['?', '?']
         initials = ''.join([part[0].upper() for part in name_parts[:2]])
-        yesterday_rank = user.get('yesterday_rank')
+        yesterday_rank = user.get('stored_previous_rank')
         rank_change = (int(yesterday_rank) - int(user['rank'])) if yesterday_rank else None
         consistency_rank = user_id_to_consistency_rank.get(str(user['user_id']))
+        prev_consistency_rank = user.get('stored_prev_consistency_rank') or user_id_to_prev_consistency_rank.get(str(user['user_id']))
         leaderboard.append({
-            "rank":               user['rank'],
-            "rank_change":        rank_change,        # positive = moved up today
-            "consistency_rank":   consistency_rank,
+            "rank":                    user['rank'],
+            "previous_rank":           int(yesterday_rank) if yesterday_rank else None,
+            "rank_change":             rank_change,        # positive = moved up today
+            "consistency_rank":        consistency_rank,
+            "previous_consistency_rank": prev_consistency_rank,
+            "consistency_rank_change": (prev_consistency_rank - consistency_rank) if (prev_consistency_rank and consistency_rank) else None,
             "user_id":            str(user['user_id']),
             "name":               user['name'],
             "initials":           initials,

@@ -75,7 +75,7 @@ async def update_all_previous_ranks():
                     ranked AS (
                         SELECT
                             user_id,
-                            ROW_NUMBER() OVER (ORDER BY total_steps DESC) AS rank
+                            ROW_NUMBER() OVER (ORDER BY total_steps DESC, user_id ASC) AS rank
                         FROM user_totals
                     )
                     SELECT user_id, rank FROM ranked
@@ -132,7 +132,8 @@ async def update_all_previous_ranks():
                                          THEN ROUND((days_met_goal::numeric / :total_days) * 100, 1)
                                          ELSE 0
                                     END DESC,
-                                    total_steps DESC
+                                    total_steps DESC,
+                                    user_id ASC
                             ) AS consistency_rank
                         FROM user_totals
                     )
@@ -194,13 +195,13 @@ async def nudge_challenge_participants():
 # ─── Configure all jobs ───────────────────────────────────────────────────────
 
 # 1. Daily rank snapshot — 00:05 (still needed for leaderboard UI)
-# scheduler.add_job(
-#     update_all_previous_ranks,
-#     CronTrigger(hour=0, minute=5, timezone="Asia/Kolkata"),
-#     id='update_previous_ranks',
-#     replace_existing=True,
-# )
-# logger.info("Job configured: rank snapshot @ 00:05 IST daily")
+scheduler.add_job(
+    update_all_previous_ranks,
+    CronTrigger(hour=0, minute=5, timezone="Asia/Kolkata"),
+    id='update_previous_ranks',
+    replace_existing=True,
+)
+logger.info("Job configured: rank snapshot @ 00:05 IST daily")
 
 # 2. Streak-at-risk alert — 20:00 (8 PM) IST
 scheduler.add_job(
@@ -310,13 +311,13 @@ async def nightly_insight_job():
 
 scheduler.add_job(
     nightly_insight_job,
-    CronTrigger(hour=23, minute=37, timezone="Asia/Kolkata"),
+    CronTrigger(hour=7, minute=15, timezone="Asia/Kolkata"),
     id='nightly_ai_insights',
     replace_existing=True,
 )
-logger.info("Job configured: nightly AI insight generation @ 23:37 IST daily")
+logger.info("Job configured: nightly AI insight generation @ 03:06  IST daily")
 
-# 9. Habit cycle completion summary — 21:00 IST (challenges ending today)
+# 9. Habit cycle completion summary — 21:30 IST (challenges ending today)
 async def habit_cycle_summary_job():
     async with AsyncSessionLocal() as db:
         try:
@@ -327,11 +328,11 @@ async def habit_cycle_summary_job():
 
 scheduler.add_job(
     habit_cycle_summary_job,
-    CronTrigger(hour=1, minute=30, timezone="Asia/Kolkata"),
+    CronTrigger(hour=21, minute=33, timezone="Asia/Kolkata"),
     id='habit_cycle_summary',
     replace_existing=True,
 )
-logger.info("Job configured: habit cycle summary @ 01:30 IST daily")
+logger.info("Job configured: habit cycle summary @ 21:33 IST daily")
 
 # 9. Rank change notifications — 21:30 IST (after step reminders, using day's snapshot)
 # scheduler.add_job(

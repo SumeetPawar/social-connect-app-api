@@ -6,7 +6,7 @@ Output format (rich text):
       "badge":    str,          # short upbeat label (plain text)
       "segments": [...],        # headline as rich-text spans
       "detail":   [...],        # detail line as rich-text spans
-      "hook":     str,          # "come back tomorrow" engagement line (plain text)
+      "hook":     str,          # today's call-to-action / urgency line (plain text)
     }
 
 Each span in segments / detail:
@@ -267,6 +267,79 @@ async def _collect_stats(db: AsyncSession, user_id: str) -> dict:
             habit_raw_streak       = sd.get("current_streak", 0)
         except Exception:
             pass
+
+    # ── Habit pack ranking (separate leaderboard from steps) ────────────────
+    habit_rank              = None
+    habit_rank_change       = None
+    habit_total_participants = None
+    if habit_challenge_id:
+        try:
+            hrank_row = await db.execute(text("""
+                WITH my_challenge AS (
+                    SELECT hc.id, hc.pack_id, COUNT(DISTINCT hcm.id) AS total_habits
+                    FROM habit_challenges hc
+                    JOIN habit_commitments hcm ON hcm.challenge_id = hc.id
+                    WHERE hc.id = :cid
+                    GROUP BY hc.id
+                ),
+                pack_challenges AS (
+                    SELECT hc.user_id, hc.id AS challenge_id,
+                           COUNT(DISTINCT hcm.id) AS total_habits
+                    FROM habit_challenges hc
+                    JOIN habit_commitments hcm ON hcm.challenge_id = hc.id
+                    JOIN my_challenge mc ON hc.pack_id = mc.pack_id
+                    WHERE hc.status = 'active'
+                    GROUP BY hc.user_id, hc.id
+                ),
+                daily_counts AS (
+                    SELECT hcm.challenge_id, dl.logged_date,
+                           COUNT(*) FILTER (WHERE dl.completed) AS done
+                    FROM daily_logs dl
+                    JOIN habit_commitments hcm ON hcm.id = dl.commitment_id
+                    GROUP BY hcm.challenge_id, dl.logged_date
+                ),
+                user_scores AS (
+                    SELECT pc.user_id,
+                           COUNT(DISTINCT CASE
+                               WHEN dc.done >= GREATEST(1, CEIL(pc.total_habits::numeric / 2))
+                               THEN dc.logged_date END) AS good_days
+                    FROM pack_challenges pc
+                    LEFT JOIN daily_counts dc ON dc.challenge_id = pc.challenge_id
+                    GROUP BY pc.user_id
+                ),
+                daily_counts_yest AS (
+                    SELECT hcm.challenge_id, dl.logged_date,
+                           COUNT(*) FILTER (WHERE dl.completed) AS done
+                    FROM daily_logs dl
+                    JOIN habit_commitments hcm ON hcm.id = dl.commitment_id
+                    WHERE dl.logged_date < :today
+                    GROUP BY hcm.challenge_id, dl.logged_date
+                ),
+                user_scores_yest AS (
+                    SELECT pc.user_id,
+                           COUNT(DISTINCT CASE
+                               WHEN dc.done >= GREATEST(1, CEIL(pc.total_habits::numeric / 2))
+                               THEN dc.logged_date END) AS good_days
+                    FROM pack_challenges pc
+                    LEFT JOIN daily_counts_yest dc ON dc.challenge_id = pc.challenge_id
+                    GROUP BY pc.user_id
+                ),
+                ranked      AS (SELECT user_id, ROW_NUMBER() OVER (ORDER BY good_days DESC, user_id ASC) AS rnk FROM user_scores),
+                ranked_yest AS (SELECT user_id, ROW_NUMBER() OVER (ORDER BY good_days DESC, user_id ASC) AS rnk FROM user_scores_yest)
+                SELECT
+                    (SELECT rnk FROM ranked      WHERE user_id = :uid) AS habit_rank,
+                    (SELECT rnk FROM ranked_yest WHERE user_id = :uid) AS habit_rank_yesterday,
+                    (SELECT COUNT(*) FROM user_scores)                  AS total_participants,
+                    (SELECT pack_id FROM my_challenge)                  AS pack_id
+            """), {"cid": habit_challenge_id, "uid": str(user_id), "today": today})
+            hr = hrank_row.mappings().first()
+            if hr and hr["pack_id"] and hr["habit_rank"]:
+                habit_rank               = int(hr["habit_rank"])
+                habit_total_participants = int(hr["total_participants"] or 0)
+                if hr["habit_rank_yesterday"]:
+                    habit_rank_change = int(hr["habit_rank_yesterday"]) - habit_rank
+        except Exception:
+            pass
     steps_vs_target_pct = round(
         int(s.get("steps_yesterday") or 0) / daily_target * 100
     ) if daily_target else 0
@@ -331,15 +404,29 @@ async def _collect_stats(db: AsyncSession, user_id: str) -> dict:
         "habit_streak_current":     habit_raw_streak,
         "habit_streak_effective":   habit_effective_streak,  # shield-protected (use this for display)
         "habit_streak_longest":     habit_longest_streak,
+        # Habit challenge has its own separate pack leaderboard (independent of steps)
+        "habit_rank":               habit_rank,
+        "habit_rank_change":        habit_rank_change,
+        "habit_total_participants": habit_total_participants,
     }
 
 
 # ── shared prompt ─────────────────────────────────────────────────────────────
 
 _SYSTEM = """\
-You are the motivational voice inside a fitness app — sharp, warm, and honest.
-Your job: turn raw 7-day stats into a daily insight that makes the user feel seen
-and genuinely excited to open the app again tomorrow.
+You are the motivational coach and mission guide inside a fitness app — sharp, warm, honest, and addictive.
+Your job: turn raw 7-day stats (collected through yesterday) into a daily insight the user reads TODAY.
+The insight should make them feel personally seen and give them a clear, urgent reason to act RIGHT NOW — today.
+
+TIMING CONTEXT: Stats are from yesterday and earlier. The user is reading this TODAY, mid-day or morning.
+  → "detail" = today's single most important mission (what they need to do TODAY to protect/extend their streak or rank)
+  → "hook"   = the immediate stakes today — what is ON THE LINE right now, not a future tease
+
+TONE: Coach calling out what matters MOST today, not a recap of yesterday. Every line should feel personally urgent.
+ADDICTIVE FEEL: Use mission framing ("today's mission", "today's the day", "this is the moment") and danger-of-loss
+  anchors ("one short walk from safety", "don't break the chain today") — urgent without being harsh or judgmental.
+HONESTY: Call out what matters most right now — if a streak is at risk TODAY, make it the center. If they're crushing it, celebrate loudly.
+Never generic affirmations. Be specific to their actual data.
 
 IMPORTANT: The user message will tell you whether this user tracks steps, habits, or both.
 Only reference data that exists for them. Never mention steps for a habits-only user,
@@ -383,84 +470,181 @@ Return ONLY a valid JSON object (no markdown, no code fences) with these four ke
   - Never start with "You"
 
 "detail"
-  One scannable line — metric + value + 2–3 word context anchor. Max 12 words total.
-  Formula: [metric] + [number] + [anchor that makes the number meaningful]
+  One scannable line — metric + value + 2–3 word motivational anchor. Max 12 words total.
+  This is the user's personal mission for today/this week: urgent, achievable, streak-protective.
 
-  Best anchors (pick whichever fits):
-    "— best this week"  /  "— above your average"  /  "— longest this month"
-    "— 78% of target"   /  "— on track"             /  "— 3 days running"
+  CRITICAL: This app has TWO completely separate challenges with separate leaderboards:
+    A) STEPS CHALLENGE — global leaderboard, ranked by cumulative steps.
+       Relevant fields: step_streak, step_rank, steps_daily_target, steps_vs_target_pct
+       step_rank = position among ALL step challenge users (#1 = most steps)
+    B) HABITS CHALLENGE — pack leaderboard (private group), ranked by consistency good-days.
+       Relevant fields: habit_streak_effective, habit_rank, habit_pct_week, habit_perfect_days_week
+       habit_rank = position among pack members (#1 = most consistent)
+    Never mix them. A rank improvement in habits has NOTHING to do with steps, and vice versa.
 
-  Pick the metric closest to a milestone or most surprising in the data:
-    • Habit with highest streak or completion rate this week
-    • Steps average vs daily target
-    • Perfect habit days count vs days elapsed
-    • Step streak vs personal best
+  PICK THE STRONGEST SIGNAL — scan both challenges and choose the one anchor with the most urgency TODAY:
+    PRIORITY ORDER:
+    1. STREAK AT RISK — either step or habit streak in 3-6 day danger window (fragile, needs protecting today)
+       → "Habit chain: 5 days — one missed day today breaks it"
+       → "Step streak: 4 days — one short walk from losing it"
+    2. MILESTONE TODAY — either streak is 1 day away from 7/14/21/30 (they can hit it TODAY)
+       → "Habit streak: 6 days — today is your first-week badge"
+       → "Step streak: 13 days — today could make it 2 weeks straight"
+    3. RANK ON THE BRINK — either challenge rank is 1-2 spots from top 3 or #1 (today's effort matters)
+       → "Habits: rank #4 in your pack — top 3 is one good day away"
+       → "Steps: rank #2 — one strong day from the top"
+    4. HABIT STREAK FIRE — strong ongoing streak (7+ days), use today's mission language
+       → "Habit chain: 9 days — today's mission: keep the fire alive"
+    5. VS WEEKLY TARGET — steps or habit completion % vs goal (close enough that today moves the needle)
+       → "Steps: 78% of target this week — today can push you over"
+       → "Habits: 5/7 days perfect — today could seal a great week"
+    6. PERSONAL RECORD near — effective streak approaching their longest ever
+       → "Habit streak: 18 days — 3 from your all-time best"
 
-  Rules:
-  - "highlight" for metric/habit names, "stat" for all numbers, "normal" for anchors
-  - Anchor = context only — never advice ("keep going", "try to", "you should")
-  - If no strong anchor exists, metric + value alone is fine
+  TONE RULES (motivational urgency — NOT harsh):
+    - Danger framing = protective, not punishing ("one short walk from losing it", "don't break the chain today")
+    - Mission language rooted in TODAY: "today's mission", "today is the day", "this is the moment"
+    - Never shame or give generic advice ("keep going", "try harder", "you should", "make sure")
+    - Numbers always feel personally significant — milestone proximity, personal bests, vs-rank
+    - If both challenges are active, pick whichever ONE has higher urgency TODAY — don't cram both into detail
+
+  STYLING:
+    - "highlight" for challenge/habit/metric names, "stat" for all numbers, "normal" for anchor text
+    - Spaces between spans handled by renderer — never add extra spaces inside text values
 
 "hook"
-  One short sentence (max 12 words) that creates genuine curiosity or stakes for tomorrow.
-  Tease something: a possible streak milestone, a rank they could reach, a perfect day within reach.
-  Never generic ("Keep it up!"). Be specific to the data.
-  Examples:
-    "Two more days and the 7-day milestone is yours."
-    "One step away from cracking the top 3."
-    "A perfect habit day tomorrow ends the week on a high."
+  One short sentence (max 12 words) that drives TODAY's action — the immediate stakes right now.
+  This is the gut-punch that makes them put the phone down and go DO the thing. Make it feel urgent and personal.
+  Data is from yesterday — hook is about what TODAY's effort will protect or unlock.
+
+  BOTH CHALLENGES CAN FEED THE HOOK — use whichever creates the highest urgency TODAY:
+    STEPS CHALLENGE (global, ranked by total steps):
+      • Streak protection: "Hit your target today — that step streak stays alive."
+      • Milestone today: "Today's steps could make it 7 days straight."
+      • Rank today: "One strong session today keeps the #2 spot."
+      • Rank climber: "One solid day today and you're in the top 3."
+    HABITS CHALLENGE (pack-based, ranked by good-habit days):
+      • Streak protection: "Log your habits today — the chain is still intact."
+      • Milestone today: "One good habit day today = your first full week."
+      • Rank today: "A consistent day today could move you past #3 in your pack."
+      • Perfect week: "All habits today and this week ends as your best yet."
+    CROSS-CHALLENGE (when user has both & both have something at stake):
+      • "Step streak and habit chain both on the line — protect both today."
+      • "Pack rank #2 and step streak at 6 — today is the biggest day this week."
+
+  TONE:
+    - Always name a SPECIFIC stake (rank #, streak length, milestone, badge)
+    - Personal pronouns ("you", "your") make it feel directed at them, not a template
+    - Urgency anchored in today: "today", "right now", "this session", "today is the day"
+    - Never generic ("Keep it up!", "You got this!", "Stay consistent!", "Come back tomorrow!")
+    - If streak is at risk → protective urgency tone; if milestone within reach → excitement tone
 """
 
 
 def _build_user_message(stats: dict) -> str:
     has_steps  = stats.get("steps_week", 0) > 0 or stats.get("steps_yesterday", 0) > 0
     has_habits = stats.get("habits_total", 0) > 0
-    step_rank  = stats.get("step_rank")
+    step_rank   = stats.get("step_rank")
     step_streak = stats.get("step_streak", 0)
     habit_streak = stats.get("habit_streak_effective", 0)
-    habit_pct = stats.get("habit_pct_week", 0)
+    habit_rank   = stats.get("habit_rank")
+    habit_pct    = stats.get("habit_pct_week", 0)
+    habit_total_participants = stats.get("habit_total_participants")
+
+    # Build per-challenge context blocks
+    steps_context = ""
+    habits_context = ""
+
+    if has_steps:
+        step_rank_str = f"#{step_rank}" if step_rank else "unranked"
+        steps_context = (
+            f"STEPS CHALLENGE (global leaderboard — ranked by total steps across all users):\n"
+            f"  step_rank = {step_rank_str}  |  step_streak = {step_streak} days  "
+            f"|  steps_vs_target_pct = {stats.get('steps_vs_target_pct', 0)}%\n"
+        )
+        if step_rank and step_rank <= 3:
+            steps_context += f"  → Top-3 on the leaderboard — this is impressive, lead with it.\n"
+        elif step_rank and step_rank <= 6:
+            steps_context += f"  → Just outside top 3 — one strong day could move them up.\n"
+        if step_streak >= 5:
+            steps_context += f"  → {step_streak}-day step streak — fragile, worth protecting.\n"
+        elif step_streak >= 3:
+            steps_context += f"  → {step_streak}-day step streak — building momentum.\n"
+
+    if has_habits:
+        habit_rank_str = f"#{habit_rank} of {habit_total_participants}" if habit_rank and habit_total_participants else (f"#{habit_rank}" if habit_rank else "unranked")
+        habits_context = (
+            f"HABITS CHALLENGE (pack leaderboard — ranked by consistency/good-habit days within their group):\n"
+            f"  habit_rank = {habit_rank_str}  |  habit_streak_effective = {habit_streak} days  "
+            f"|  habit_pct_week = {habit_pct}%\n"
+        )
+        if habit_rank and habit_rank <= 3:
+            habits_context += f"  → Top-3 in pack — strong consistency ranking, celebrate this.\n"
+        elif habit_rank and habit_rank <= 6:
+            habits_context += f"  → {habit_rank_str} in pack — close to top 3, one good day could move them up.\n"
+        if habit_streak >= 14:
+            habits_context += f"  → {habit_streak}-day habit streak — significant milestone territory.\n"
+        elif 5 <= habit_streak <= 6:
+            habits_context += f"  → {habit_streak}-day habit streak — in the danger/milestone window, high urgency.\n"
+        elif 3 <= habit_streak < 5:
+            habits_context += f"  → {habit_streak}-day habit streak — building, danger framing appropriate.\n"
 
     if has_steps and has_habits:
-        # Guide the AI to lead with the most impressive metric
-        if step_rank and step_rank <= 3:
-            lead = f"Their step ranking is impressive: #{step_rank} on the leaderboard."
-        elif habit_streak >= 7:
-            lead = f"Their habit streak is strong: {habit_streak} days effective."
-        elif step_streak >= 5:
-            lead = f"They are on a {step_streak}-day step streak."
-        elif habit_pct >= 80:
-            lead = f"They completed {habit_pct}% of habits this week."
-        else:
-            lead = "Use the most interesting number from the stats."
+        # Identify which challenge has higher urgency for detail and hook focus
+        urgency_notes = []
+        if step_streak in range(5, 7) or habit_streak in range(5, 7):
+            urgency_notes.append("At least one streak is in the 5-6 day danger/milestone window — today's effort protects or extends it.")
+        if step_rank and step_rank <= 2:
+            urgency_notes.append(f"Step rank is #{step_rank} — one strong day today holds or improves it.")
+        if habit_rank and habit_rank <= 2:
+            urgency_notes.append(f"Habit pack rank is #{habit_rank} — a consistent day today keeps them near the top.")
+        urgency_block = ("  URGENCY NOTES (use to drive today-focused detail and hook):\n" +
+                         "\n".join(f"  • {n}" for n in urgency_notes) + "\n") if urgency_notes else ""
+
         context = (
-            f"This user tracks BOTH steps and habits. {lead}\n"
-            "Use both step and habit data — lead with whichever is more impressive. "
-            "Reference step_rank when it's strong, habit_streak_effective for habit streak."
+            "This user participates in BOTH challenges. These are COMPLETELY SEPARATE competitions:\n"
+            f"{steps_context}"
+            f"{habits_context}"
+            f"{urgency_block}"
+            "Stats are from yesterday. The user reads this TODAY and needs to act TODAY.\n"
+            "Lead segments with the most impressive stat overall. "
+            "For detail, pick whichever single challenge has the most urgent story for TODAY's action. "
+            "For hook, name the specific stake TODAY's effort will protect or unlock — rank, streak, milestone, or perfect day."
         )
     elif has_steps:
         context = (
-            "This user tracks STEPS ONLY — they have no habit challenge. "
+            "This user is in the STEPS CHALLENGE ONLY — no habit challenge.\n"
+            f"{steps_context}"
+            "Stats are from yesterday. The user reads this TODAY and needs to act TODAY.\n"
             "Do NOT mention habits, habit streaks, or habit counts anywhere. "
-            "Focus entirely on steps, step_streak, steps_daily_target, and step_rank."
+            "Focus entirely on what TODAY's steps effort will protect or unlock: step_streak, step_rank, steps_daily_target."
         )
     else:
         context = (
-            "This user tracks HABITS ONLY — they have no step challenge. "
+            "This user is in the HABITS CHALLENGE ONLY — no step challenge.\n"
+            f"{habits_context}"
+            "Stats are from yesterday. The user reads this TODAY and needs to act TODAY.\n"
             "Do NOT mention steps, step_streak, daily step targets, or step_rank anywhere. "
-            "Focus entirely on habit_streak_effective, habit completions, and perfect days."
+            "Focus on what TODAY's habit effort will protect or unlock: habit_streak_effective, habit_rank, perfect days."
         )
 
     glossary = (
         "Data field glossary (use these exact names from the JSON below):\n"
-        "  step_rank                — leaderboard position in the step challenge (1 = best; null = not in one)\n"
-        "  step_streak              — consecutive days user hit their daily step target\n"
+        "  ── STEPS CHALLENGE (global leaderboard) ──\n"
+        "  step_rank                — position on the global step leaderboard (1 = most steps; null = not enrolled)\n"
+        "  step_streak              — consecutive days the user hit their daily step target\n"
+        "  steps_daily_target       — their personal daily step goal\n"
+        "  steps_vs_target_pct      — yesterday's steps as % of their daily target\n"
+        "  ── HABITS CHALLENGE (pack/group leaderboard) ──\n"
+        "  habit_rank               — position within their habit pack (1 = most consistent; null = no pack)\n"
+        "  habit_rank_change        — positive = moved UP ranks, negative = dropped (null if unknown)\n"
+        "  habit_total_participants — total members in their habit pack\n"
         "  habit_streak_effective   — MAIN habit streak: shield-protected consecutive good habit days (use this)\n"
-        "  habit_streak_current     — raw habit streak (no shield help) — secondary reference\n"
-        "  habit_streak_longest     — best ever shield-protected habit streak\n"
-        "  habit_pct_week           — % of all habits completed across this week\n"
-        "  habit_perfect_days_week  — days this week where ALL habits were done\n"
-        "  steps_*                  — all step-related fields\n"
-        "NEVER confuse step_rank (steps leaderboard) with habit streaks.\n"
+        "  habit_streak_current     — raw habit streak (no shield protection) — secondary reference only\n"
+        "  habit_streak_longest     — personal best shield-protected habit streak (ever)\n"
+        "  habit_pct_week           — % of all habits completed this week\n"
+        "  habit_perfect_days_week  — days this week where ALL habits were completed\n"
+        "CRITICAL: step_rank and habit_rank are DIFFERENT leaderboards. Never mix or confuse them.\n"
     )
 
     return (
@@ -594,5 +778,5 @@ def _fallback(stats: dict) -> dict:
         "badge":    "Yesterday at a glance",
         "segments": segments,
         "detail":   detail,
-        "hook":     "Come back tomorrow to see your progress grow.",
+        "hook":     "One step today keeps the streak alive — make it count.",
     }

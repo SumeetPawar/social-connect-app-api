@@ -44,8 +44,105 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 #   python scripts/db_admin_tools.py delete_push_subscription <subscription_id>
 # Delete all push subscriptions:
 #   python scripts/db_admin_tools.py delete_all_push_subscriptions
+# Remove a user from a steps challenge (soft — sets left_at, excluded from leaderboard):
+#   python scripts/db_admin_tools.py remove_from_challenge <user_id> <challenge_id>
+# Hard-remove a user from a steps challenge (deletes participant row entirely):
+#   python scripts/db_admin_tools.py hard_remove_from_challenge <user_id> <challenge_id>
+# List challenges a user is enrolled in:
+#   python scripts/db_admin_tools.py list_user_challenges <user_id>
 # Send a test push notification to a specific user by user_id:
 #   python scripts/db_admin_tools.py push_to_user <user_id>
+
+async def list_user_challenges(user_id: str):
+    """List all step challenges a user is enrolled in (active and left)."""
+    conn = await asyncpg.connect(DB_URL)
+    rows = await conn.fetch("""
+        SELECT
+            cp.challenge_id,
+            c.title,
+            c.status,
+            c.start_date,
+            c.end_date,
+            cp.left_at
+        FROM challenge_participants cp
+        JOIN challenges c ON c.id = cp.challenge_id
+        WHERE cp.user_id = $1
+        ORDER BY c.start_date DESC
+    """, user_id)
+    await conn.close()
+    if not rows:
+        print(f"No challenge enrollments found for user {user_id}")
+        return
+    print(f"{'challenge_id':<38}  {'title':<30}  {'status':<8}  {'start':<12}  {'end':<12}  left_at")
+    print("-" * 120)
+    for r in rows:
+        left = str(r['left_at']) if r['left_at'] else "(active)"
+        print(f"{str(r['challenge_id']):<38}  {str(r['title']):<30}  {r['status']:<8}  {str(r['start_date']):<12}  {str(r['end_date']):<12}  {left}")
+
+
+async def remove_from_challenge(user_id: str, challenge_id: str):
+    """
+    Soft-remove a user from a steps challenge by setting left_at = now.
+    The participant row is kept but all leaderboard queries filter WHERE left_at IS NULL,
+    so they disappear from rankings immediately. Their daily_steps data is preserved.
+    """
+    conn = await asyncpg.connect(DB_URL)
+    # Show current state first
+    row = await conn.fetchrow("""
+        SELECT cp.left_at, c.title, c.status
+        FROM challenge_participants cp
+        JOIN challenges c ON c.id = cp.challenge_id
+        WHERE cp.user_id = $1 AND cp.challenge_id = $2
+    """, user_id, challenge_id)
+    if not row:
+        print(f"❌  No enrollment found for user {user_id} in challenge {challenge_id}")
+        await conn.close()
+        return
+    if row['left_at']:
+        print(f"⚠️   User already removed (left_at={row['left_at']}) from '{row['title']}'")
+        await conn.close()
+        return
+    result = await conn.execute("""
+        UPDATE challenge_participants
+        SET left_at = NOW()
+        WHERE user_id = $1 AND challenge_id = $2 AND left_at IS NULL
+    """, user_id, challenge_id)
+    await conn.close()
+    print(f"✅  Soft-removed user {user_id} from '{row['title']}' (challenge {challenge_id}).")
+    print(f"    left_at set to NOW(). Steps data preserved. User no longer appears on leaderboard.")
+    print(f"    Rows updated: {result.split()[-1]}")
+
+
+async def hard_remove_from_challenge(user_id: str, challenge_id: str):
+    """
+    Hard-remove: DELETE the challenge_participants row entirely.
+    Use this to fully erase an accidental enrollment.
+    Daily steps data is NOT deleted — only the participant record.
+    """
+    conn = await asyncpg.connect(DB_URL)
+    row = await conn.fetchrow("""
+        SELECT cp.left_at, c.title
+        FROM challenge_participants cp
+        JOIN challenges c ON c.id = cp.challenge_id
+        WHERE cp.user_id = $1 AND cp.challenge_id = $2
+    """, user_id, challenge_id)
+    if not row:
+        print(f"❌  No enrollment found for user {user_id} in challenge {challenge_id}")
+        await conn.close()
+        return
+    confirm = input(f"⚠️  Hard-delete participant row for user {user_id} from '{row['title']}'? [yes/N]: ").strip()
+    if confirm.lower() != 'yes':
+        print("Aborted.")
+        await conn.close()
+        return
+    result = await conn.execute("""
+        DELETE FROM challenge_participants
+        WHERE user_id = $1 AND challenge_id = $2
+    """, user_id, challenge_id)
+    await conn.close()
+    print(f"✅  Hard-removed participant row. Rows deleted: {result.split()[-1]}")
+    print(f"    Daily steps data for this user is still in daily_steps table.")
+
 
 async def list_push_subscriptions():
     """
@@ -376,6 +473,12 @@ if __name__ == '__main__':
         asyncio.run(list_admins())
     elif cmd == 'list_departments':
         asyncio.run(list_departments())
+    elif cmd == 'list_user_challenges' and len(sys.argv) == 3:
+        asyncio.run(list_user_challenges(sys.argv[2]))
+    elif cmd == 'remove_from_challenge' and len(sys.argv) == 4:
+        asyncio.run(remove_from_challenge(sys.argv[2], sys.argv[3]))
+    elif cmd == 'hard_remove_from_challenge' and len(sys.argv) == 4:
+        asyncio.run(hard_remove_from_challenge(sys.argv[2], sys.argv[3]))
     elif cmd == 'list_push_subscriptions':
         asyncio.run(list_push_subscriptions())
     elif cmd == 'delete_push_subscription' and len(sys.argv) == 3:

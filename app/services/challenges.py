@@ -275,7 +275,7 @@ class ChallengesService:
                 detail="Challenge not found"
             )
         
-        # Check if already joined
+        # Check if already actively joined (left_at IS NULL)
         existing_stmt = select(ChallengeParticipant).where(
             and_(
                 ChallengeParticipant.challenge_id == challenge_id,
@@ -285,38 +285,56 @@ class ChallengesService:
         )
         existing_result = await db.execute(existing_stmt)
         existing = existing_result.scalar_one_or_none()
-        
+
         if existing:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail="Already joined this challenge"
             )
-        
+
+        # Check for a soft-removed row (left_at IS NOT NULL) — reactivate instead of inserting
+        softremoved_stmt = select(ChallengeParticipant).where(
+            and_(
+                ChallengeParticipant.challenge_id == challenge_id,
+                ChallengeParticipant.user_id == user_id,
+                ChallengeParticipant.left_at.is_not(None)
+            )
+        )
+        softremoved_result = await db.execute(softremoved_stmt)
+        softremoved = softremoved_result.scalar_one_or_none()
+
         # Validate team if provided
         if join_data.team_id:
             team_stmt = select(Team).where(Team.id == join_data.team_id)
             team_result = await db.execute(team_stmt)
             team = team_result.scalar_one_or_none()
-            
+
             if not team:
                 raise HTTPException(
                     status_code=status.HTTP_404_NOT_FOUND,
                     detail="Team not found"
                 )
-        
-        # Create participant
-        participant = ChallengeParticipant(
-            challenge_id=challenge_id,
-            user_id=user_id,
-            team_id=join_data.team_id,
-            selected_daily_target=join_data.selected_daily_target,
-            challenge_current_streak=0,
-            challenge_longest_streak=0,
-            challenge_perfect_days=0,
-            challenge_total_score=0
-        )
-        
-        db.add(participant)
+
+        if softremoved:
+            # Reactivate: clear left_at and update target/team, preserve streaks/history
+            softremoved.left_at = None
+            softremoved.team_id = join_data.team_id
+            softremoved.selected_daily_target = join_data.selected_daily_target
+            participant = softremoved
+        else:
+            # Fresh join
+            participant = ChallengeParticipant(
+                challenge_id=challenge_id,
+                user_id=user_id,
+                team_id=join_data.team_id,
+                selected_daily_target=join_data.selected_daily_target,
+                challenge_current_streak=0,
+                challenge_longest_streak=0,
+                challenge_perfect_days=0,
+                challenge_total_score=0
+            )
+            db.add(participant)
+
         await db.commit()
         await db.refresh(participant)
         
