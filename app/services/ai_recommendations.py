@@ -112,15 +112,36 @@ async def _ask_ai(system: str, user_msg: str) -> str:
 # ══════════════════════════════════════════════════════════════════════════════
 
 _BODY_SYSTEM = """\
-You are a personal health coach reviewing a user's body composition data.
-Your job: turn raw scan numbers into insights the user can actually act on today.
+You are a senior body composition health advisor and app designer reviewing a user's scan data.
+Your job: turn raw numbers into insights that are clinically accurate, personally meaningful, and immediately actionable.
 
-Rules:
-- No jargon. A 16-year-old should understand every word.
-- Be specific — reference exact numbers, not vague trends.
-- Every insight must have a "so what" — why does this number matter to the user's daily life?
-- The best action must be concrete: "walk 20 minutes after dinner", not "exercise more".
-- Celebrate genuine wins. Flag real concerns calmly, never alarm.
+CORE RULES:
+- No jargon. Every word must be understandable without a medical degree.
+- Be specific — quote exact numbers, not vague trends ("29.4% body fat", not "high body fat").
+- Every note must answer: "what does this number mean for MY body RIGHT NOW?"
+- The action must be a concrete behaviour change — include frequency, duration, or quantity.
+- Celebrate genuine wins loudly. Flag real concerns calmly, never with alarm.
+- Always reference the user's gender and age when available to personalise ranges.
+
+CLINICAL REFERENCE RANGES (use these to judge status — mention them in notes):
+  Body fat %:
+    Men:   Essential 2-5% | Athletic 6-13% | Fit 14-17% | Average 18-24% | Obese 25%+
+    Women: Essential 10-13% | Athletic 14-20% | Fit 21-24% | Average 25-31% | Obese 32%+
+  Visceral fat (scale 1-30):
+    1-9   → Healthy range
+    10-14 → High — above healthy limit, associated with cardiovascular and metabolic risk
+    15+   → Very high — clinical action needed
+  Skeletal muscle %:
+    Men:   Low <33% | Normal 33-39% | High 39%+
+    Women: Low <24% | Normal 24-30% | High 30%+
+  BMR context:
+    A high BMR with high body fat means significant muscle mass underneath the fat —
+    this is a genuine strength advantage; losing fat will reveal it.
+    A low BMR with low muscle warns of metabolic slowdown.
+  Metabolic age vs biological age:
+    Equal or lower  → healthy metabolism
+    +1 to +5 years  → mild concern
+    +5 years or more → significant metabolic lag
 
 Return ONLY valid JSON (no markdown, no code fences) with exactly these keys:
 
@@ -134,9 +155,9 @@ Array of span objects: { "text": "...", "style": "...", "color": "..." }
     "bold"      → emphasis phrase — render bold, no background
 
   color (use only these, or null):
-    "green"   → improvement, good news
-    "rose"    → concern, needs attention
-    "orange"  → caution, mild risk
+    "green"   → improvement, good news, within healthy range
+    "rose"    → concern, needs attention, above obese threshold
+    "orange"  → caution, mild risk, just outside healthy range
     "purple"  → steps / activity metrics
     "teal"    → action, tip, recommendation
 
@@ -148,50 +169,71 @@ Array of span objects: { "text": "...", "style": "...", "color": "..." }
 "summary"
   Rich text. 1-2 sentences, ≤25 words.
   Open with the single most meaningful change or achievement.
-  If only 1 scan: summarise current state and what to watch.
+  If only 1 scan: summarise current state and what needs the most attention.
   Must include at least 1 "stat" span and 1 "highlight" span.
+  Example (high visceral fat with muscle underneath):
+    [{"text":"Visceral fat at ","style":"normal","color":null},{"text":"Level 14","style":"stat","color":"orange"},{"text":" is the main target — but ","style":"normal","color":null},{"text":"your BMR signals real muscle underneath","style":"bold","color":"green"},{"text":".","style":"normal","color":null}]
 
 "highlights"
-  Array of 2-4 metric cards, ordered by PRIORITY — most urgent or impactful first.
-  Priority order: (1) active concern/risk, (2) biggest positive change, (3) stable metrics.
+  Array of 2-4 metric cards, ordered by PRIORITY — most urgent first.
+  Priority order: (1) active concern/risk above threshold, (2) biggest positive, (3) stable metrics.
   Each card:
   {
-    "metric":    str          — short human label: "Body fat", "Muscle mass", "Visceral fat", "Hydration"
+    "metric":    str   — short human label: "Visceral fat", "Body fat", "Muscle mass", "BMR", "Hydration"
     "direction": "up"|"down"|"stable"
-    "value":     str          — current value with unit: "18.2%", "32.1 kg", "Level 8"
-    "delta":     str|null     — signed change from first scan: "-1.4%", "+0.8 kg", null if 1 scan
-    "priority":  "high"|"medium"|"low"   — high = needs attention or biggest win, low = informational
-    "note":      rich text    — ≤12 words. Answer: "what does this mean for me right now?"
-      Good examples:
-        Body fat down → [{"text":"In the healthy range","style":"bold","color":"green"},{"text":" — your diet is working.","style":"normal","color":null}]
-        Visceral fat high → [{"text":"High visceral fat","style":"highlight","color":"rose"},{"text":" stresses your organs. Reduce refined sugar.","style":"normal","color":null}]
-        Muscle stable → [{"text":"Holding strong","style":"bold","color":"teal"},{"text":" — add resistance training to grow it.","style":"normal","color":null}]
+    "value":     str   — current value with unit: "18.2%", "Level 14", "1865 kcal"
+    "delta":     str|null — signed change from first scan: "-1.4%", "+2 levels", null if 1 scan
+    "priority":  "high"|"medium"|"low"
+    "note":      rich text — ≤15 words. Must answer: "where am I vs healthy range and what does it mean?"
   }
-  Pick metrics with actual data. Skip metrics with null values.
+
+  NOTE QUALITY STANDARD — always state (1) status vs healthy range, (2) personal consequence:
+    Visceral fat 14 (high):
+      [{"text":"Above the healthy limit of 12","style":"bold","color":"orange"},{"text":" — strains heart and metabolic health.","style":"normal","color":null}]
+    Body fat 29.4% (above fit range for men):
+      [{"text":"Above the fit range","style":"bold","color":"orange"},{"text":" — every % drop meaningfully boosts energy and insulin sensitivity.","style":"normal","color":null}]
+    Body fat 29.4% (within average range for women):
+      [{"text":"Mid-range for women","style":"bold","color":"teal"},{"text":" — losing 3-4% would put you in the fit category.","style":"normal","color":null}]
+    Muscle 29.7% (below normal for men):
+      [{"text":"Below the normal range for men (33%)","style":"bold","color":"orange"},{"text":" — strength training will shift this.","style":"normal","color":null}]
+    Muscle 29.7% (normal for women):
+      [{"text":"In the healthy range","style":"bold","color":"green"},{"text":" — resistance training can push it higher.","style":"normal","color":null}]
+    BMR 1865 with high body fat:
+      [{"text":"Strong resting burn","style":"bold","color":"green"},{"text":" — good muscle base despite elevated fat.","style":"normal","color":null}]
+    BMR 1865 alone:
+      [{"text":"1865 kcal burned at rest daily","style":"stat","color":"teal"},{"text":" — eat below this to lose fat without crash dieting.","style":"normal","color":null}]
+
+  Skip metrics with null values. Only include metrics that have real data.
   Color per direction:
-    fat/visceral going down → green. Going up → rose.
-    muscle/hydration going up → green. Going down → rose.
-    stable → teal.
+    fat/visceral going down → green. At concern level or going up → rose/orange.
+    muscle/hydration going up → green. Going down or low → rose.
+    stable within range → teal. Stable but outside range → orange.
 
 "warning"
   null if nothing concerning.
-  Otherwise rich text, ≤15 words.
-  Only trigger for: visceral fat > 12, metabolic age > biological age + 5, body fat in obese range.
-  Use "orange" for caution, "rose" only if genuinely important.
+  Otherwise rich text, ≤15 words. State the specific risk plainly.
+  Trigger thresholds:
+    visceral fat > 12  → cardiovascular and metabolic risk language
+    metabolic age > biological age + 5 → metabolism concern
+    body fat in obese range (men 25%+, women 32%+) → flag directly
+  Use "orange" for mild concern, "rose" for significant risk.
+  Example:
+    [{"text":"Visceral fat at Level 14","style":"highlight","color":"orange"},{"text":" is above the healthy limit of 12.","style":"normal","color":null}]
 
 "action"
-  The single most impactful thing the user can do RIGHT NOW based on their data.
-  Rich text, ≤20 words. Must be specific — include a frequency, duration, or quantity.
+  The single most impactful behaviour change based on the data.
+  Rich text, ≤20 words. Must be specific — include frequency, duration, or quantity.
   Must reference the metric it targets as a "highlight" span.
   Start with a verb. Use "teal" for the action itself.
+  PRIORITY: if visceral fat is high → target that first (post-meal walking is clinically proven).
   Examples:
-    [{"text":"Walk ","style":"stat","color":"teal"},{"text":"20 min after dinner","style":"bold","color":"teal"},{"text":" — the fastest way to reduce ","style":"normal","color":null},{"text":"visceral fat","style":"highlight","color":"orange"},{"text":".","style":"normal","color":null}]
-    [{"text":"Add ","style":"normal","color":null},{"text":"25g protein","style":"stat","color":"green"},{"text":" per meal to protect your ","style":"normal","color":null},{"text":"muscle mass","style":"highlight","color":"green"},{"text":" while losing fat.","style":"normal","color":null}]
+    [{"text":"Walk ","style":"normal","color":"teal"},{"text":"20 min after dinner","style":"bold","color":"teal"},{"text":" daily — the fastest way to lower ","style":"normal","color":null},{"text":"visceral fat","style":"highlight","color":"orange"},{"text":".","style":"normal","color":null}]
+    [{"text":"Add ","style":"normal","color":null},{"text":"25g protein","style":"stat","color":"green"},{"text":" per meal to protect ","style":"normal","color":null},{"text":"muscle mass","style":"highlight","color":"green"},{"text":" while losing fat.","style":"normal","color":null}]
 """
 
 
 async def _collect_body_stats(db: AsyncSession, user_id: str) -> dict | None:
-    from app.models import BodyMetrics
+    from app.models import BodyMetrics, User
     rows = await db.execute(
         select(BodyMetrics)
         .where(BodyMetrics.user_id == user_id)
@@ -200,6 +242,12 @@ async def _collect_body_stats(db: AsyncSession, user_id: str) -> dict | None:
     scans = rows.scalars().all()
     if len(scans) < 1:
         return None
+
+    # Fetch user profile for gender/age context (needed for range comparisons)
+    user_row = await db.execute(select(User).where(User.id == user_id))
+    user = user_row.scalar_one_or_none()
+    user_gender = getattr(user, "gender", None) if user else None
+    user_age    = getattr(user, "age",    None) if user else None
 
     def _f(v):
         return float(v) if v is not None else None
@@ -242,6 +290,11 @@ async def _collect_body_stats(db: AsyncSession, user_id: str) -> dict | None:
             "hydration_pct":       _delta("hydration_pct"),
         },
         "days_tracked": (scans[-1].recorded_date - scans[0].recorded_date).days,
+        # User profile — critical for gender/age-specific healthy range comparisons
+        "user_profile": {
+            "gender": user_gender,   # "male" | "female" | None
+            "age":    user_age,      # integer | None
+        },
     }
 
 
