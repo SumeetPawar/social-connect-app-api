@@ -647,11 +647,43 @@ def _build_user_message(stats: dict) -> str:
         "CRITICAL: step_rank and habit_rank are DIFFERENT leaderboards. Never mix or confuse them.\n"
     )
 
+    # Build a structured JSON that groups fields by challenge — prevents AI from mixing them
+    structured: dict = {}
+
+    if has_steps:
+        structured["STEPS_CHALLENGE"] = {
+            "leaderboard":        "global — ranked by cumulative steps",
+            "step_rank":          stats.get("step_rank"),
+            "step_streak_days":   stats.get("step_streak", 0),
+            "steps_yesterday":    stats.get("steps_yesterday", 0),
+            "steps_week_total":   stats.get("steps_week", 0),
+            "steps_daily_target": stats.get("steps_daily_target", 8000),
+            "vs_target_pct":      stats.get("steps_vs_target_pct", 0),
+        }
+
+    if has_habits:
+        structured["HABITS_CHALLENGE"] = {
+            "leaderboard":              "pack/group — ranked by consistency (good-habit days)",
+            "habit_rank":               stats.get("habit_rank"),
+            "habit_total_pack_members": stats.get("habit_total_participants"),
+            "habit_rank_change":        stats.get("habit_rank_change"),
+            "habit_streak_effective":   stats.get("habit_streak_effective", 0),
+            "habit_streak_longest_ever":stats.get("habit_streak_longest", 0),
+            "habit_pct_week":           stats.get("habit_pct_week", 0),
+            "habit_perfect_days_week":  stats.get("habit_perfect_days_week", 0),
+            "habits_done_yesterday":    stats.get("habits_done_yesterday", 0),
+            "habits_total":             stats.get("habits_total", 0),
+            "best_habit_this_week":     stats.get("best_habit_this_week"),
+            "weakest_habit":            stats.get("weakest_habit"),
+            "challenge_day_number":     stats.get("habit_day_number"),
+            "challenge_days_remaining": stats.get("habit_days_remaining"),
+        }
+
     return (
         f"{context}\n\n"
         f"{glossary}\n"
-        "Here are the user's stats for the past 7 days:\n"
-        f"{json.dumps(stats, indent=2)}\n\n"
+        "Here are the user's stats (grouped by challenge — keep them separate):\n"
+        f"{json.dumps(structured, indent=2)}\n\n"
         "Generate the insight JSON now."
     )
 

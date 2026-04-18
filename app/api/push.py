@@ -1,8 +1,9 @@
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select, delete
+from sqlalchemy import select, delete, text
 from typing import Literal
 import logging
+from datetime import date, timedelta
 
 from app.db.deps import get_db
 from app.auth.deps import get_current_user
@@ -149,3 +150,109 @@ async def trigger_notification_job(
 
     count = await job_map[job](db)
     return {"status": "ok", "job": job, "users_notified": count}
+
+
+@router.get("/logs")
+async def push_delivery_logs(
+    days: int = Query(default=7, ge=1, le=90),
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    """
+    Admin dashboard — notification delivery log for the last N days.
+    Shows every push attempt: job name, result (ok/expired/error), title, timestamp.
+
+    GET /api/push/logs          → last 7 days
+    GET /api/push/logs?days=30  → last 30 days
+    """
+    if user.role != "admin":
+        raise HTTPException(status_code=403, detail="Admin only")
+
+    since = date.today() - timedelta(days=days)
+
+    # Per-job success rate summary
+    summary_rows = await db.execute(text("""
+        SELECT
+            job,
+            COUNT(*)                                          AS total,
+            COUNT(*) FILTER (WHERE result = 'ok')            AS delivered,
+            COUNT(*) FILTER (WHERE result = 'expired')       AS expired,
+            COUNT(*) FILTER (WHERE result = 'error')         AS errors,
+            MAX(sent_at)                                      AS last_fired
+        FROM push_logs
+        WHERE sent_at >= :since
+        GROUP BY job
+        ORDER BY last_fired DESC
+    """), {"since": since})
+
+    summary = [
+        {
+            "job":        r["job"],
+            "total":      r["total"],
+            "delivered":  r["delivered"],
+            "expired":    r["expired"],
+            "errors":     r["errors"],
+            "success_pct": round(r["delivered"] / r["total"] * 100) if r["total"] else 0,
+            "last_fired": r["last_fired"].isoformat() if r["last_fired"] else None,
+        }
+        for r in summary_rows.mappings().all()
+    ]
+
+    # Per-day delivery counts
+    daily_rows = await db.execute(text("""
+        SELECT
+            sent_at::date                                     AS day,
+            COUNT(*)                                          AS total,
+            COUNT(*) FILTER (WHERE result = 'ok')            AS delivered,
+            COUNT(*) FILTER (WHERE result = 'error')         AS errors
+        FROM push_logs
+        WHERE sent_at >= :since
+        GROUP BY sent_at::date
+        ORDER BY day DESC
+    """), {"since": since})
+
+    daily = [
+        {
+            "day":       str(r["day"]),
+            "total":     r["total"],
+            "delivered": r["delivered"],
+            "errors":    r["errors"],
+        }
+        for r in daily_rows.mappings().all()
+    ]
+
+    # Recent individual log entries
+    recent_rows = await db.execute(text("""
+        SELECT pl.job, pl.result, pl.title, pl.sent_at, u.name AS user_name
+        FROM push_logs pl
+        JOIN users u ON u.id = pl.user_id
+        WHERE pl.sent_at >= :since
+        ORDER BY pl.sent_at DESC
+        LIMIT 100
+    """), {"since": since})
+
+    recent = [
+        {
+            "job":       r["job"],
+            "result":    r["result"],
+            "title":     r["title"],
+            "user":      r["user_name"],
+            "sent_at":   r["sent_at"].isoformat(),
+        }
+        for r in recent_rows.mappings().all()
+    ]
+
+    total_sent = sum(s["total"] for s in summary)
+    total_ok   = sum(s["delivered"] for s in summary)
+
+    return {
+        "period_days":    days,
+        "overall": {
+            "total_attempts": total_sent,
+            "delivered":      total_ok,
+            "success_pct":    round(total_ok / total_sent * 100) if total_sent else 0,
+        },
+        "by_job":  summary,
+        "by_day":  daily,
+        "recent":  recent,
+    }

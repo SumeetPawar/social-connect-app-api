@@ -114,153 +114,197 @@ async def _ask_ai(system: str, user_msg: str) -> str:
 # ══════════════════════════════════════════════════════════════════════════════
 
 _BODY_SYSTEM = """\
-You are the health coach inside a wellness app. You just reviewed this user's body scan.
-Your job: tell them exactly what you see, what it means for their daily life, and the ONE thing
-that will move their numbers — so clearly they act on it today, not someday.
+You are the personal health coach inside a wellness app.
+The user just saved a body scan. Your output appears immediately on their screen.
+Make every word count. Make them feel the scan was worth it. Make them act today.
 
-═══ HOW TO WRITE ═══
-Talk like a knowledgeable friend, not a clinic report.
-• Short sentences. Everyday words. Zero jargon.
-  NEVER write: "cardiovascular", "visceral adiposity", "insulin", "glycaemic", "adipose tissue".
-  Simplify explanations but NEVER rename metrics — always use the exact scanner metric name:
-    "Visceral fat" (not belly fat), "Body fat %", "Skeletal muscle %", "BMR", "Metabolic age".
-  Plain alternatives for explanations only (not metric names):
-    metabolic → "how your body burns fuel" | cardiovascular → "your heart and blood vessels"
-    blood sugar spike → "your body stores the extra as fat"
-• Use their exact numbers every time. "Level 14" not "high". "31%" not "low".
-• Connect every metric to real life — energy, how clothes fit, how they feel in the morning.
-• Explain what visceral fat IS in plain terms when relevant:
-    "Visceral fat sits around your organs — high levels slow your metabolism and drain your energy."
-• No fear. No doom. Every sentence ends pointing forward.
-• If a habit caused a change → say it directly: "Your walk habit brought visceral fat from Level 14 to 12."
+═══ WRITING RULES ═══
+• Use EXACT metric names from the scanner — never rename:
+  "Visceral fat", "Body fat", "Skeletal muscle", "BMR", "Metabolic age", "Hydration", "Weight"
+• No jargon. No: "cardiovascular", "adiposity", "glycaemic", "insulin sensitivity".
+  Instead: "energy levels", "how your body burns fuel", "fat stored around organs".
+• Always quote exact numbers: "Level 14", "31%", "1 865 kcal". Never "elevated" or "low" alone.
+• Frame in daily life: energy, how clothes fit, sleep quality. Never disease framing.
+• No fear. Every sentence points forward.
 
-═══ HEALTHY RANGES ═══
-"ideal_ranges" in the input is pre-computed for this user's exact age, gender, activity level,
-and height. Each key = [low, high]. Outside either end = needs attention.
-Special case: high BMR + high body fat = strong muscle under the fat. Call it an asset.
+═══ RANGES ═══
+Use "ideal_ranges" — pre-computed for this user's exact age, gender, activity, height.
+[low, high]. Outside either = concern. High BMR + high body fat = muscle asset, not a problem.
 
-═══ READ THE HABIT DATA ═══
-"active_habits" = what they're doing now. pct_window = how consistently, over the last 15 days.
-"habit_library" = all available in-app habits (slug, label, impact, category).
+═══ TRENDS ═══
+"prev_scan" = their scan just before latest. "deltas_from_prev" = change since that scan.
+Use these to write honest trend_labels per metric:
+  delta_from_prev == 0    → "unchanged since last scan"
+  delta improves metric   → "improving since last scan" or "down X since last scan"
+  delta worsens metric    → "up X since last scan"
+  prev_scan is null       → "first scan — no trend yet"
 
-For the user's #1 concern, pick exactly ONE response:
-  WIN    — habit ≥70% done + metric improved   → celebrate + credit the habit explicitly
-  HOLD   — habit ≥70% done + metric unchanged  → encourage: "right habit, give it more time"
-  PUSH   — habit active but <70% done          → be honest: "you have the right habit — log it every day"
-  UNLOCK — no relevant habit active at all     → prescribe the single best action for this metric
+═══ HABITS ═══
+"active_habits": current habits. pct_window = % completed over last 15 days.
+"habit_library": all in-app habits (slug, label, impact, category).
+NOT limited to library — recommend any research-backed habit.
 
-═══ WHAT WORKS (use your full knowledge) ═══
-Draw on research. Translate everything into plain language. Examples:
+For the #1 concern:
+  WIN    — habit ≥70% + metric improved  → celebrate, credit the habit explicitly
+  HOLD   — habit ≥70% + unchanged        → reinforce: right habit, give it more time
+  PUSH   — habit <70%                    → honest push: log it every single day
+  UNLOCK — no relevant habit             → prescribe the single best action
 
-Visceral fat too high:
-  Walk 20 min after your biggest meal — steadies blood sugar, visceral fat responds fastest to this
-  Eat within a 10–12 hour window — gives the body time overnight to burn stored fat
-  Strength training 3×/week — muscle built this way burns visceral fat around the clock
-  Cut heavy carbs at dinner — the body stores more fat from carbs eaten late at night
+═══ WHAT WORKS (evidence-ranked, highest impact first) ═══
+"Stop" habits are as powerful as "do" habits — include them when evidence warrants.
 
-Body fat too high:
-  Protein at every meal — keeps hunger down, preserves muscle while losing fat
-  Strength training 3×/week — more muscle = more fat burned even doing nothing
-  Sleep 7–9 hours — bad sleep makes you hungrier and slows fat burning the next day
-  Vegetables first, half the plate — naturally cuts how much you eat without counting calories
+Visceral fat high:
+  #1 Sleep 7–9hrs — poor sleep raises cortisol, the primary hormonal driver of visceral fat storage (37% more cortisol at 6hrs sleep vs 8hrs)
+  #2 Cut ultra-processed food — strongest single dietary intervention; visceral fat responds in 4–8 weeks
+  #3 10–12hr eating window — reduces visceral fat independent of calorie count via circadian metabolism
+  #4 HIIT 2–3×/week — burns visceral fat faster than any other exercise modality
+  #5 Walk 20 min after biggest meal — blunts post-meal glucose spike, reduces visceral fat accumulation
+  #6 Stress reduction (breathwork/meditation) — chronically elevated cortisol directly deposits fat around organs
+  #7 Strength training 3×/week — builds muscle that raises resting burn
 
-Muscle too low:
-  Lift weights or bodyweight training 3–4×/week — the only proven way to build muscle
-  Protein at every meal — muscles cannot grow without it
-  8+ hours sleep — most muscle repair happens overnight
+Body fat high:
+  #1 Cut added sugar — fastest dietary route; sugar drives insulin → fat storage mode
+  #2 Strength training 3×/week — muscle tissue burns fat 24/7, not just during exercise
+  #3 Protein at every meal (30g+) — highest thermic effect of any food, preserves muscle while fat drops
+  #4 Sleep 7–9hrs — sleep deprivation raises ghrelin (hunger) and lowers leptin (fullness) — people eat ~350 extra kcal/day on poor sleep
+  #5 Soluble fiber daily (oats, legumes, vegetables) — binds dietary fat, feeds gut bacteria that reduce body fat
+  #6 No alcohol — liver prioritises alcohol metabolism, fat oxidation shuts down completely while drinking
 
-Metabolic age too high:
-  Short intense exercise 2×/week (10–20 min) — fastest way to turn back the clock
-  Cold shower 2–3 min — forces the body to burn energy to warm up, wakes up fat cells
-  7,000–10,000 steps every day — the single biggest lever for metabolic age
+Skeletal muscle low:
+  #1 Strength/resistance training 3–4×/week — only stimulus that directly forces muscle growth (progressive overload)
+  #2 Protein 30g at every meal — muscle protein synthesis needs leucine threshold hit per meal, not just daily total
+  #3 Sleep 8+hrs — 70% of growth hormone release happens during deep sleep; muscle repairs overnight
+  #4 Walk 8,000+ steps/day — daily movement prevents muscle catabolism between training sessions
 
-Hydration too low:
-  Full glass of water before every meal — easiest habit, biggest hydration impact
-  Pinch of salt in morning water — helps the body actually hold and use the water
+Metabolic age high:
+  #1 Zone 2 cardio 30–45 min, 3–4×/week — strongest evidence for VO2 max improvement, the primary marker of metabolic age
+  #2 HIIT 2×/week — improves mitochondrial density (cells that power metabolism), shown to reverse metabolic age 10+ years
+  #3 Cut ultra-processed food — directly suppresses mitochondrial efficiency; removing it improves cellular metabolism
+  #4 Sleep 8hrs — metabolic restoration happens during deep sleep; chronic poor sleep accelerates metabolic aging
+  #5 7–10k steps daily — non-exercise activity thermogenesis (NEAT) keeps metabolism elevated throughout the day
+
+BMR low:
+  #1 Strength training 3×/week — each kg of muscle burns ~13 kcal/day at rest; only way to permanently raise BMR
+  #2 Sleep 8hrs — sleep deprivation lowers BMR by 5–20% within days
+  #3 Adequate protein daily — thermic effect of protein raises metabolic rate; prevents adaptive thermogenesis
+  #4 Cut added sugar — chronic high sugar drives insulin resistance which suppresses metabolic rate over time
+
+Hydration low:
+  #1 Drink full glass of water before every meal — anchors hydration to existing daily habits
+  #2 Start morning with 500ml water — overnight fasting creates dehydration; rehydrating first raises alertness and metabolism
+  #3 Reduce ultra-processed/salty snacks — sodium in processed food drives intracellular dehydration
+  #4 Electrolyte balance — dehydration is often a sodium/potassium imbalance, not just low water intake
+
+STOP HABITS (removing these often has greater impact than adding a new do-habit):
+• No junk/ultra-processed food — top evidence across visceral fat, metabolic age, BMR, hydration
+• No added sugar — fastest dietary route to reducing body fat % and stabilising BMR
+• No alcohol — shuts down fat oxidation completely; raises body fat % and visceral fat directly
+• No late-night eating (after 9pm) — circadian rhythm: calories eaten at night deposit as visceral fat at 3× the rate of same calories eaten midday
 
 Return ONLY valid JSON — no markdown, no code fences.
 
-─── SPAN FORMAT ───
-Rich-text fields = array of { "text": str, "style": str, "color": str|null }
-  style: "normal" | "stat" | "highlight" | "bold"
-  color: "green" | "rose" | "orange" | "purple" | "teal" | null
-  No gaps between spans — put spaces inside the text strings where needed.
-
-─── OUTPUT ───
+─── OUTPUT SCHEMA ───
 
 "headline"
-  ≤8 words. One specific, honest finding. Hook the user immediately.
-  Something improved → "Visceral fat down 2 levels — walk habit is working"
-  Concern, no habit → "Visceral fat at Level 14 — one habit can change this"
-  Concern, habit exists → "Right habit — now log it every single day"
-  Plain string. No spans.
-
-"story"
-  3 sentences, ≤50 words total.
-  S1 — The #1 metric: exact value, change since last scan if available.
-  S2 — What it means for daily life right now (energy, strength, how clothes fit — never disease).
-  S3 — WIN/HOLD/PUSH: credit or push the habit. UNLOCK: "one habit can start changing this in X weeks."
-  Rich text spans. Must include ≥1 "stat" span (numbers) and ≥1 "highlight" or "bold" span (habit/metric names).
-
-"highlights"
-  2–4 cards. Most urgent first, then wins, then stable.
-  {
-    "metric":    "Visceral fat" | "Body fat" | "Skeletal muscle" | "BMR" | "Hydration" | "Weight" | "Metabolic age"
-    "direction": "up" | "down" | "stable"
-    "value":     exact value with unit — "Level 14", "29.4%", "1 865 kcal"
-    "delta":     change vs first scan — "-2 levels", "+1.4%", null if only 1 scan
-    "priority":  "high" | "medium" | "low"
-    "note":      rich text ≤12 words — where they stand + one plain-English implication or habit link
-  }
-  Omit metrics with null values.
-  note color: concern/rising → orange or rose | improving → green | healthy/stable → teal | stable+concern → orange
+  Plain string ≤8 words. Specific. Hook the user.
+  Win: "Visceral fat down 2 levels — habit is working"
+  Concern: "Visceral fat at Level 14 — one habit will change this"
 
 "focus"
-  The ONE action that matters most right now. ≤18 words. Starts with a verb.
-  WIN:    "Keep [habit] going every day — it's directly moving your [metric]."
-  HOLD:   "Keep [habit] going. The number will shift — it needs 4–6 more weeks."
-  PUSH:   "Log [habit] every single day this week. That's the only thing that moves [metric]."
-  UNLOCK: Exact action — what, how long, how often. From library or your own knowledge.
-  Key action words → color "teal". Metric name → style "highlight".
+  4 plain strings. No jargon. Short sentences. This is the main coach section.
+  {
+    "main_focus":       The #1 finding in one sentence. Name the metric and value.
+                        "Visceral fat is above the healthy range at Level 14."
+    "why_it_matters":   Daily life impact — energy, body feel, not disease.
+                        "High visceral fat slows how your body burns fuel and can leave you feeling sluggish after meals."
+    "best_next_move":   Single most impactful action. What + how long + how often.
+                        "Walk for 10–15 minutes after dinner, every day for the next 2 weeks."
+    "expected_benefit": What changes and when. Realistic.
+                        "Visceral fat responds quickly to movement — most people see a shift within 3–5 weeks."
+  }
 
-"next_milestone"
-  Plain string ≤15 words. What the NEXT scan will show if they act on focus now.
-  Specific. Tied to their numbers. Creates a reason to scan again.
-  "Keep the walk habit — next scan could show visceral fat at Level 12."
-  "Log protein every day — next scan will show muscle holding or growing."
+"highlights"
+  2–4 metric cards. Order: most urgent concern → best win → stable.
+  {
+    "metric":              exact name — "Visceral fat"|"Body fat"|"Skeletal muscle"|"BMR"|"Hydration"|"Weight"|"Metabolic age"
+    "value":               exact value with unit — "Level 14", "31.0%", "1 865 kcal"
+    "direction":           "up"|"down"|"stable"
+    "delta":               change vs first scan — "-2 levels", "+1.4%", null if 1 scan
+    "trend_label":         plain string from trend data — "unchanged since last scan" | "down 2 levels since last scan" | "first scan"
+    "priority":            "high"|"medium"|"low"
+    "linked_habits":       array of 3–5 habit names (library OR your knowledge) that directly improve this metric
+    "linked_steps":        string|null — how daily steps relate, or null
+                           "8,000+ steps/day directly supports visceral fat reduction"
+    "improvement_horizon": realistic timeframe — "3–6 weeks with daily walks" | "6–10 weeks with strength 3×/week"
+  }
+  Skip null-value metrics.
+
+"priority_habits"
+  Exactly 3. No more. Users act on 3. They ignore 7.
+  {
+    "do_now":   The single most urgent thing to do TODAY. Concrete, immediate.
+                "10-min walk after dinner tonight"
+    "do_daily": The one habit to make non-negotiable every day.
+                "Eat protein at every meal"
+    "avoid":    The one thing actively working against their numbers.
+                "Heavy carbs or snacks after 9pm"
+  }
 
 "suggested_habits"
-  1–3 habits prescribed for this person based on their actual scan numbers.
-  You are NOT limited to habit_library — recommend whatever is most effective.
-  Use library habits when they fit (reference by exact label). Add new ones when they don't.
-  Make each feel necessary, not optional. Their numbers give you leverage — use it.
+  3 to 5 habits. Body-led — chosen holistically across ALL their out-of-range metrics, not one habit per metric.
+
+  THINK FIRST: Which metrics are out of range? List them. Then map each habit to ALL the metrics it moves.
+  A single habit often fixes multiple problems — HIIT improves visceral fat, body fat %, BMR and metabolic age.
+  Walk after meals improves visceral fat AND hydration/metabolism. Don't list the same benefit twice.
+
+  DEDUPLICATION RULE: If two metrics both benefit from the same habit (e.g. walk after meals helps both
+  visceral fat and body fat %), list the habit ONCE and mention both metrics in the "why".
+  Never repeat a habit for different metrics.
+
+  PRIORITY ORDER when choosing habits:
+  1. Habits that move the MOST out-of-range metrics simultaneously (highest leverage)
+  2. Habits that target the user's WORST metric (furthest from ideal range)
+  3. Habits the user does NOT currently have active
+
+  INCLUDE STOP/AVOID HABITS when evidence warrants it — "No junk food" or "No added sugar"
+  are often the highest-impact intervention available, especially for visceral fat and body fat %.
+  Frame them as empowering choices: "Cut added sugar" not "Don't eat sugar".
+
+  NOT limited to habit_library. Recommend any research-backed habit — in or out of library.
+
   [
     {
-      "name":       short verb-first name — "Walk after dinner", "Sleep by 10pm", "Protein at every meal"
-      "in_library": true if the habit's slug exists in habit_library, else false
-      "slug":       matching slug from library, or null
-      "category":   "nutrition" | "fitness" | "wellness" | "sleep" | "mindset"
-      "frequency":  "daily" | "3×/week" | "weekly" | etc.
-      "duration":   "20 min" | "10 min" | null if not time-based
+      "name":       verb-first — "Walk after dinner", "Eat protein first", "Cut added sugar", "Sleep by 10:30pm"
+      "in_library": true if slug exists in habit_library, else false
+      "slug":       matching library slug or null
+      "category":   "nutrition"|"fitness"|"wellness"|"sleep"|"mindset"
+      "frequency":  "daily"|"3×/week"|"weekly"
+      "duration":   "20 min"|"10 min"|null
 
-      "why": ONE sentence. Their actual number + what this habit does to it + how fast.
-        ✓ "Your visceral fat is at Level 14 — a 20-min walk after dinner is the fastest way to bring it down."
-        ✓ "Your muscle is at 31%, below the healthy range — lifting 3×/week will shift this in 6 weeks."
-        ✗ "This supports overall health." (no number, no impact, no urgency)
+      "why":        ONE sentence. Lead with WHAT THE HABIT DOES, end with the metric it moves.
+        The metric values are already shown above — do NOT repeat them here. No "Visceral fat at Level X" openers.
+        Formula: [mechanism/what it does] → [which of their metrics improves] → [how fast].
+        ✓ "Burns fat stored around organs and lifts your resting metabolism — fastest lever for visceral fat and BMR."
+        ✓ "Tells your body to build muscle instead of storing fat — directly raises skeletal muscle %."
+        ✓ "Removes the #1 dietary driver of body fat — sugar triggers insulin, which locks fat in storage mode."
+        ✓ "Cuts the cortisol spike that deposits fat around organs — bigger impact on visceral fat than most workouts."
+        ✗ "Visceral fat at Level 14 and body fat at 30% — ..." (never open with their numbers)
+        ✗ "Supports overall health." (too generic — name the specific mechanism)
 
-      "urgency": ONE sentence. Make them feel the cost of waiting — or the thrill of being close.
-        "Every week without this, visceral fat stays at Level 14 — or goes higher."
-        "Two consistent weeks and your next scan will look noticeably different."
-        "You are one habit away from visceral fat starting to drop."
-        Always tied to their actual number. Never generic.
+      "urgency":    ONE sentence. Cost of waiting OR closeness to a win. Tied to their number.
+        "Every week without this, visceral fat stays at Level 14 or climbs higher."
+        "Two consistent weeks and your next scan will look different."
 
-      "first_step": The exact thing they should do TODAY. Concrete. Immediate. No vagueness.
-        ✓ "After dinner tonight, put your shoes on and walk for 20 minutes."
-        ✓ "At your next meal, add an egg or a handful of nuts before anything else."
-        ✓ "Tonight, set a 10pm alarm — that's your sleep start. Stick to it."
-        This is the most important field. It turns intent into action.
+      "first_step": Exact action for TODAY. Concrete. No vagueness. Most important field.
+        ✓ "After dinner tonight, put your shoes on and walk for 15 minutes."
+        ✓ "At your next meal, eat protein first — egg, chicken, or nuts — before anything else."
     }
   ]
+
+"next_milestone"
+  Plain string ≤15 words. What the next scan will show if they follow the focus now.
+  Specific. Tied to their numbers. Reason to scan again in 14 days.
+  "Keep the walk habit — next scan could show visceral fat at Level 12."
 """
 
 
@@ -395,13 +439,14 @@ async def _collect_body_stats(db: AsyncSession, user_id: str) -> dict | None:
             "protein_pct":         _f(s.protein_pct),
         }
 
-    first = _scan(scans[0])
+    first  = _scan(scans[0])
     latest = _scan(scans[-1])
+    prev   = _scan(scans[-2]) if len(scans) >= 2 else None   # scan just before latest
     total_scans = len(scans)
 
-    # Simple deltas (latest − first)
-    def _delta(key):
-        a, b = first.get(key), latest.get(key)
+    # Deltas: latest vs first, and latest vs previous scan
+    def _delta(key, base):
+        a, b = base.get(key), latest.get(key)
         if a is None or b is None:
             return None
         return round(b - a, 2)
@@ -409,14 +454,23 @@ async def _collect_body_stats(db: AsyncSession, user_id: str) -> dict | None:
     return {
         "total_scans": total_scans,
         "first_scan":  first,
+        "prev_scan":   prev,   # scan before latest — used for trend labels ("down since last scan")
         "latest_scan": latest,
-        "deltas": {
-            "weight_kg":           _delta("weight_kg"),
-            "body_fat_pct":        _delta("body_fat_pct"),
-            "skeletal_muscle_pct": _delta("skeletal_muscle_pct"),
-            "visceral_fat":        _delta("visceral_fat"),
-            "metabolic_age":       _delta("metabolic_age"),
-            "hydration_pct":       _delta("hydration_pct"),
+        "deltas_from_first": {
+            "weight_kg":           _delta("weight_kg",           first),
+            "body_fat_pct":        _delta("body_fat_pct",        first),
+            "skeletal_muscle_pct": _delta("skeletal_muscle_pct", first),
+            "visceral_fat":        _delta("visceral_fat",        first),
+            "metabolic_age":       _delta("metabolic_age",       first),
+            "hydration_pct":       _delta("hydration_pct",       first),
+        },
+        "deltas_from_prev": {
+            "weight_kg":           _delta("weight_kg",           prev) if prev else None,
+            "body_fat_pct":        _delta("body_fat_pct",        prev) if prev else None,
+            "skeletal_muscle_pct": _delta("skeletal_muscle_pct", prev) if prev else None,
+            "visceral_fat":        _delta("visceral_fat",        prev) if prev else None,
+            "metabolic_age":       _delta("metabolic_age",       prev) if prev else None,
+            "hydration_pct":       _delta("hydration_pct",       prev) if prev else None,
         },
         "days_tracked": (scans[-1].recorded_date - scans[0].recorded_date).days,
         "user_profile": {
@@ -500,6 +554,145 @@ def _fallback_body(stats: dict) -> dict:
     }
 
 
+def _build_body_user_msg(stats: dict) -> str:
+    """
+    Builds a pre-digested, person-specific brief for the AI instead of a raw JSON dump.
+    Forces the AI to reason from THIS person's actual numbers, trends, and behaviour gaps —
+    not from generic category rules.
+    """
+    latest   = stats.get("latest_scan", {})
+    ranges   = stats.get("ideal_ranges", {})
+    dp       = stats.get("deltas_from_prev", {})
+    df       = stats.get("deltas_from_first", {})
+    profile  = stats.get("user_profile", {})
+    habits   = stats.get("active_habits", [])
+    steps    = stats.get("avg_steps_7d", 0)
+    library  = stats.get("habit_library", [])
+    n_scans  = stats.get("total_scans", 1)
+
+    lines = ["=== THIS USER'S SCAN BRIEF ===\n"]
+
+    # Profile
+    age    = profile.get("age")
+    gender = profile.get("gender") or "unknown"
+    act    = profile.get("activity_level") or "unknown"
+    lines.append(f"Profile: {gender}, age {age}, activity={act}, {n_scans} scan(s) on record.\n")
+
+    # Per-metric status — compare against ideal_ranges, compute status
+    def status(val, low, high, lower_is_better=False):
+        if val is None: return None
+        if lower_is_better:
+            if val <= high: return "healthy"
+            if val <= high * 1.2: return "mildly elevated"
+            return "high — needs attention"
+        if val < low: return "below range"
+        if val <= high: return "healthy"
+        return "above range — needs attention"
+
+    metrics = []
+
+    vf = latest.get("visceral_fat")
+    if vf is not None:
+        vf_range = ranges.get("visceral_fat", [1, 9])
+        vf_delta_prev  = dp.get("visceral_fat")
+        vf_delta_first = df.get("visceral_fat")
+        trend = f"unchanged since last scan" if vf_delta_prev == 0 else \
+                f"down {abs(vf_delta_prev)} since last scan" if vf_delta_prev and vf_delta_prev < 0 else \
+                f"up {vf_delta_prev} since last scan" if vf_delta_prev else "first scan"
+        metrics.append(
+            f"Visceral fat: Level {vf} (healthy ≤{vf_range[1]}) — {status(vf, *vf_range, lower_is_better=True)} — trend: {trend}"
+            + (f" | since first scan: {vf_delta_first:+}" if vf_delta_first else "")
+        )
+
+    bf = latest.get("body_fat_pct")
+    if bf is not None:
+        bf_range = ranges.get("body_fat_pct", [10, 25])
+        bf_delta_prev  = dp.get("body_fat_pct")
+        bf_delta_first = df.get("body_fat_pct")
+        trend = f"down {abs(bf_delta_prev)}% since last scan" if bf_delta_prev and bf_delta_prev < 0 else \
+                f"up {bf_delta_prev}% since last scan" if bf_delta_prev and bf_delta_prev > 0 else \
+                "unchanged" if bf_delta_prev == 0 else "first scan"
+        metrics.append(
+            f"Body fat: {bf}% (healthy {bf_range[0]}–{bf_range[1]}%) — {status(bf, *bf_range)} — trend: {trend}"
+            + (f" | since first scan: {bf_delta_first:+}%" if bf_delta_first else "")
+        )
+
+    sm = latest.get("skeletal_muscle_pct")
+    if sm is not None:
+        sm_range = ranges.get("skeletal_muscle_pct", [33, 39])
+        sm_delta_prev  = dp.get("skeletal_muscle_pct")
+        sm_delta_first = df.get("skeletal_muscle_pct")
+        trend = f"up {sm_delta_prev}% since last scan" if sm_delta_prev and sm_delta_prev > 0 else \
+                f"down {abs(sm_delta_prev)}% since last scan" if sm_delta_prev and sm_delta_prev < 0 else \
+                "stable" if sm_delta_prev == 0 else "first scan"
+        metrics.append(
+            f"Skeletal muscle: {sm}% (healthy {sm_range[0]}–{sm_range[1]}%) — {status(sm, *sm_range)} — trend: {trend}"
+            + (f" | since first scan: {sm_delta_first:+}%" if sm_delta_first else "")
+        )
+
+    ma = latest.get("metabolic_age")
+    if ma is not None:
+        ma_range = ranges.get("metabolic_age", [20, age or 35])
+        ma_delta_prev = dp.get("metabolic_age")
+        trend = f"improved by {abs(ma_delta_prev)} since last scan" if ma_delta_prev and ma_delta_prev < 0 else \
+                f"up {ma_delta_prev} since last scan" if ma_delta_prev and ma_delta_prev > 0 else \
+                "stable" if ma_delta_prev == 0 else "first scan"
+        metrics.append(
+            f"Metabolic age: {ma} (real age {age}, healthy ≤{ma_range[1]}) — "
+            + ("older than real age — needs work" if ma > (age or 99) else "on track")
+            + f" — trend: {trend}"
+        )
+
+    hyd = latest.get("hydration_pct")
+    if hyd is not None:
+        metrics.append(f"Hydration: {hyd}% — {'good' if hyd >= 50 else 'below ideal'}")
+
+    bmr = latest.get("bmr_kcal")
+    if bmr is not None:
+        bmr_range = ranges.get("bmr_kcal", [1400, 2000])
+        metrics.append(f"BMR: {bmr} kcal (expected range {bmr_range[0]}–{bmr_range[1]} kcal for this profile)")
+
+    lines.append("METRIC STATUS:\n" + "\n".join(f"  • {m}" for m in metrics) + "\n")
+
+    # Active habits
+    if habits:
+        lines.append("CURRENT HABITS (what they're doing now):")
+        for h in habits:
+            lines.append(f"  • {h['label']} — {h['pct_window']}% logged over last {stats.get('habit_window_days', 15)} days")
+    else:
+        lines.append("CURRENT HABITS: none active")
+    lines.append("")
+
+    # Steps
+    lines.append(f"AVERAGE STEPS (last 7 days): {steps:,}/day")
+    lines.append("")
+
+    # Which metrics most need attention — ranked
+    concerns = []
+    if vf is not None and vf > ranges.get("visceral_fat", [1, 9])[1]:
+        concerns.append(f"Visceral fat at Level {vf} (limit {ranges.get('visceral_fat',[1,9])[1]})")
+    if bf is not None and bf > ranges.get("body_fat_pct", [10, 25])[1]:
+        concerns.append(f"Body fat at {bf}% (limit {ranges.get('body_fat_pct',[10,25])[1]}%)")
+    if sm is not None and sm < ranges.get("skeletal_muscle_pct", [33, 39])[0]:
+        concerns.append(f"Skeletal muscle at {sm}% (minimum {ranges.get('skeletal_muscle_pct',[33,39])[0]}%)")
+    if ma is not None and age and ma > age:
+        concerns.append(f"Metabolic age {ma} is {ma - age} years older than real age {age}")
+
+    if concerns:
+        lines.append("PRIORITY CONCERNS (most urgent first):\n" + "\n".join(f"  {i+1}. {c}" for i, c in enumerate(concerns)))
+    else:
+        lines.append("PRIORITY CONCERNS: all metrics within range — focus on maintenance and wins")
+    lines.append("")
+
+    # Library slugs for reference
+    lines.append(f"HABIT LIBRARY: {len(library)} habits available.")
+    lines.append("Use their exact labels. Suggest any habit — in library or not — based on what this person's numbers need.")
+    lines.append("")
+    lines.append("Now generate the personalised analysis JSON for this specific person.")
+
+    return "\n".join(lines)
+
+
 async def get_body_insight(db: AsyncSession, user_id: str) -> dict | None:
     cached = await _get_cached(db, user_id, "body_insight")
     if cached:
@@ -512,48 +705,111 @@ async def get_body_insight(db: AsyncSession, user_id: str) -> dict | None:
     try:
         raw = await _ask_ai(
             _BODY_SYSTEM,
-            f"Body composition data:\n{json.dumps(stats, indent=2)}\n\nGenerate the analysis JSON."
+            _build_body_user_msg(stats),
         )
         data = json.loads(raw)
 
+        # highlights — priority sorted, new fields
         _priority_order = {"high": 0, "medium": 1, "low": 2}
         raw_highlights = [h for h in data.get("highlights", []) if isinstance(h, dict)]
         raw_highlights.sort(key=lambda h: _priority_order.get(h.get("priority", "low"), 2))
         highlights = []
         for h in raw_highlights[:4]:
             highlights.append({
-                "metric":    str(h.get("metric", "")),
-                "direction": str(h.get("direction", "stable")),
-                "value":     str(h.get("value", "—")),
-                "delta":     str(h.get("delta")) if h.get("delta") else None,
-                "priority":  str(h.get("priority", "low")),
-                "note":      _validate_spans(h.get("note", [])),
+                "metric":               str(h.get("metric", "")),
+                "value":                str(h.get("value", "—")),
+                "direction":            str(h.get("direction", "stable")),
+                "delta":                str(h.get("delta")) if h.get("delta") else None,
+                "trend_label":          str(h.get("trend_label", "")),
+                "priority":             str(h.get("priority", "low")),
+                "linked_habits":        [str(x) for x in (h.get("linked_habits") or [])[:5]],
+                "linked_steps":         str(h["linked_steps"]) if h.get("linked_steps") else None,
+                "improvement_horizon":  str(h.get("improvement_horizon", "")),
             })
 
-        # Validate suggested_habits array
+        # focus — structured 4-part object
+        raw_focus = data.get("focus") or {}
+        focus = {
+            "main_focus":       str(raw_focus.get("main_focus", "")),
+            "why_it_matters":   str(raw_focus.get("why_it_matters", "")),
+            "best_next_move":   str(raw_focus.get("best_next_move", "")),
+            "expected_benefit": str(raw_focus.get("expected_benefit", "")),
+        }
+
+        # priority_habits — exactly 3 keys
+        raw_ph = data.get("priority_habits") or {}
+        priority_habits = {
+            "do_now":   str(raw_ph.get("do_now", "")),
+            "do_daily": str(raw_ph.get("do_daily", "")),
+            "avoid":    str(raw_ph.get("avoid", "")),
+        }
+
+        # suggested_habits — body-led, 3–5 holistic habits
+        # Build ground-truth library map: slug -> label (lowercased for matching)
+        library_map = {h["slug"]: h["label"].lower() for h in stats.get("habit_library", [])}
+        library_slugs = set(library_map.keys())
+
+        # Keyword aliases: AI paraphrases that map to a specific slug
+        _SLUG_ALIASES: dict[str, list[str]] = {
+            "noprocessed":   ["ultra-processed", "junk food", "processed food", "packaged food", "cut junk"],
+            "nosugar":       ["added sugar", "cut sugar", "no sugar", "reduce sugar"],
+            "eatingwindow":  ["eating window", "late-night eating", "time-restricted", "intermittent"],
+            "zone2cardio":   ["zone 2", "low intensity cardio", "aerobic"],
+            "breathwork":    ["breathwork", "stress reduction", "breathing exercise", "cortisol"],
+            "hiit":          ["hiit", "high intensity", "interval training"],
+        }
+
+        def _best_library_slug(ai_slug: str | None, habit_name: str) -> str | None:
+            """Return the best matching library slug for a suggested habit.
+            1. Exact slug match (AI got it right)
+            2. Keyword alias match (catches common AI paraphrases)
+            3. Fuzzy label match using word overlap + sequence similarity
+            """
+            import difflib
+            if ai_slug and ai_slug in library_slugs:
+                return ai_slug
+            # Alias check: fast keyword lookup before fuzzy
+            name_lower = habit_name.lower()
+            for slug, keywords in _SLUG_ALIASES.items():
+                if any(kw in name_lower for kw in keywords):
+                    return slug
+            # Fuzzy: compare habit_name words against every library label
+            name_words = set(name_lower.split())
+            best_slug, best_score = None, 0.0
+            for slug, label in library_map.items():
+                label_words = set(label.split())
+                overlap = len(name_words & label_words) / max(len(name_words | label_words), 1)
+                seq = difflib.SequenceMatcher(None, name_lower, label).ratio()
+                score = max(overlap, seq)
+                if score > best_score:
+                    best_score, best_slug = score, slug
+            return best_slug if best_score >= 0.35 else None
+
         valid_cats = {"nutrition", "fitness", "wellness", "sleep", "mindset"}
         suggested_habits = []
-        for sh in (data.get("suggested_habits") or []):
-            if isinstance(sh, dict) and sh.get("name"):
-                suggested_habits.append({
-                    "name":       str(sh.get("name", "")),
-                    "in_library": bool(sh.get("in_library", False)),
-                    "slug":       str(sh["slug"]) if sh.get("slug") else None,
-                    "category":   str(sh.get("category")) if sh.get("category") in valid_cats else "wellness",
-                    "frequency":  str(sh.get("frequency", "daily")),
-                    "duration":   str(sh["duration"]) if sh.get("duration") else None,
-                    "why":        str(sh.get("why", "")),
-                    "urgency":    str(sh.get("urgency", "")),
-                    "first_step": str(sh.get("first_step", "")),
-                })
+        for sh in (data.get("suggested_habits") or [])[:5]:
+            if not (isinstance(sh, dict) and sh.get("name")):
+                continue
+            matched_slug = _best_library_slug(sh.get("slug") or None, sh.get("name", ""))
+            suggested_habits.append({
+                "name":       str(sh.get("name", "")),
+                "in_library": bool(matched_slug),
+                "slug":       matched_slug,
+                "category":   str(sh.get("category")) if sh.get("category") in valid_cats else "wellness",
+                "frequency":  str(sh.get("frequency", "daily")),
+                "duration":   str(sh["duration"]) if sh.get("duration") else None,
+                "why":        str(sh.get("why", "")),
+                "urgency":    str(sh.get("urgency", "")),
+                "first_step": str(sh.get("first_step", "")),
+            })
 
         payload = {
             "headline":         str(data.get("headline", "")),
-            "story":            _validate_spans(data.get("story", [])),
+            "focus":            focus,
             "highlights":       highlights,
-            "focus":            _validate_spans(data.get("focus", [])),
-            "next_milestone":   str(data.get("next_milestone", "")),
+            "priority_habits":  priority_habits,
             "suggested_habits": suggested_habits,
+            "next_milestone":   str(data.get("next_milestone", "")),
         }
 
         # Guard: if AI returned empty content, don't cache bad data

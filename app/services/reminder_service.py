@@ -146,21 +146,44 @@ async def _get_subscriptions(db: AsyncSession, user_id: str) -> list:
     return result.scalars().all()
 
 
-async def _push_all(db: AsyncSession, subscriptions, message: dict) -> int:
-    """Fire notification to every device. Auto-deletes expired subscriptions."""
+async def _push_all(
+    db: AsyncSession,
+    subscriptions,
+    message: dict,
+    job: str = "unknown",
+    user_id: str | None = None,
+) -> int:
+    """Fire notification to every device. Auto-deletes expired subscriptions.
+    Logs every attempt to push_logs for delivery tracking.
+    """
     sent = 0
+    title = message.get("title", "")
     for sub in subscriptions:
         result = send_web_push(
             {"endpoint": sub.endpoint, "keys": {"p256dh": sub.p256dh, "auth": sub.auth}},
             message,
         )
+        uid = user_id or str(sub.user_id)
+        # Log every attempt regardless of outcome
+        await db.execute(text("""
+            INSERT INTO push_logs (user_id, job, result, title, endpoint_hash)
+            VALUES (:uid, :job, :result, :title, :ep)
+        """), {
+            "uid": uid,
+            "job": job,
+            "result": result,
+            "title": title,
+            "ep": sub.endpoint[-12:] if sub.endpoint else None,
+        })
+        await db.commit()
+
         if result == PushResult.OK:
             sent += 1
         elif result == PushResult.EXPIRED:
             logger.info(f"Deleting expired subscription {sub.id}")
             await db.delete(sub)
             await db.commit()
-        # PushResult.ERROR: log already done inside send_web_push, just skip
+        # PushResult.ERROR: already logged in push_logs + send_web_push warning
     return sent
 
 
@@ -616,7 +639,7 @@ async def send_step_reminders(db: AsyncSession):
                 "title": title_tpl.format(name=name),
                 "body":  body_tpl.format(name=name),
                 "url":   url,
-            })
+            }, job="step_reminder", user_id=str(user.id))
             if sent:
                 notified += 1
         except Exception as e:
@@ -660,7 +683,7 @@ async def send_streak_at_risk(db: AsyncSession):
                 "title": title_tpl.format(name=name, streak=streak, streak_plus_one=streak + 1),
                 "body":  body_tpl.format(name=name, streak=streak, streak_plus_one=streak + 1),
                 "url":   url,
-            })
+            }, job="streak_at_risk", user_id=str(user.id))
             if sent:
                 notified += 1
         except Exception as e:
@@ -780,7 +803,7 @@ async def send_challenge_step_nudges(db: AsyncSession):
             if not await _try_claim_push_slot(db, row["user_id"]):
                 continue
             subs = await _get_subscriptions(db, row["user_id"])
-            sent = await _push_all(db, subs, {"title": title, "body": body, "url": url})
+            sent = await _push_all(db, subs, {"title": title, "body": body, "url": url}, job="challenge_nudge", user_id=str(row["user_id"]))
             if sent:
                 notified += 1
         except Exception as e:
@@ -834,7 +857,7 @@ async def send_habit_morning_reminder(db: AsyncSession):
                 "title": title_tpl.format(name=name),
                 "body":  body_tpl.format(name=name),
                 "url":   "/socialapp/habits",
-            })
+            }, job="habit_morning_reminder", user_id=str(row["user_id"]))
             if sent:
                 notified += 1
         except Exception as e:
@@ -894,7 +917,7 @@ async def send_habit_evening_nudge(db: AsyncSession):
                 "title": title_tpl.format(name=name, done=done_count, remaining=remaining_count, total=total_count, ds=ds, rs=rs),
                 "body":  body_tpl.format(name=name, done=done_count, remaining=remaining_count, total=total_count, ds=ds, rs=rs),
                 "url":   "/socialapp/habits",
-            })
+            }, job="habit_evening_nudge", user_id=str(row["user_id"]))
             if sent:
                 notified += 1
         except Exception as e:
@@ -922,7 +945,7 @@ async def fire_habit_perfect_day(db: AsyncSession, user_id: str, challenge_id: i
             "title": title_tpl.format(name=name),
             "body":  body_tpl.format(name=name),
             "url":   "/socialapp/habits",
-        })
+        }, job="perfect_day", user_id=str(user_id))
         logger.info(f"Perfect-day push sent to user {user_id} (challenge {challenge_id})")
     except Exception as e:
         logger.error(f"fire_habit_perfect_day error for user {user_id}: {e}")
@@ -946,7 +969,7 @@ async def fire_habit_streak_milestone(db: AsyncSession, user_id: str, streak: in
             "title": title_tpl.format(name=name, streak=streak),
             "body":  body_tpl.format(name=name, streak=streak),
             "url":   "/socialapp/habits",
-        })
+        }, job="streak_milestone", user_id=str(user_id))
         logger.info(f"Streak-milestone push ({streak} days) sent to user {user_id}")
     except Exception as e:
         logger.error(f"fire_habit_streak_milestone error for user {user_id}: {e}")
@@ -1000,7 +1023,7 @@ async def send_weekly_summary(db: AsyncSession):
                 "title": title_tpl.format(name=name),
                 "body":  body_tpl.format(name=name, steps=weekly_steps, habit_pct=habit_pct),
                 "url":   "/socialapp",
-            })
+            }, job="weekly_summary", user_id=str(user.id))
             if sent:
                 notified += 1
         except Exception as e:
@@ -1080,7 +1103,7 @@ async def send_rank_change_notifications(db: AsyncSession):
                     "title": title_tpl.format(name=name, rank=curr_rank, moved=moved, s=s),
                     "body":  body_tpl.format(name=name, rank=curr_rank, moved=moved, s=s),
                     "url":   f"/socialapp/challanges/{ch['id']}/steps",
-                })
+                }, job="rank_change", user_id=str(uid))
                 if sent:
                     notified += 1
         except Exception as e:
@@ -1177,7 +1200,7 @@ async def send_habit_cycle_summary(db: AsyncSession):
                         possible_days=possible,
                     ),
                     "url": "/socialapp/habits",
-                })
+                }, job="habit_cycle_summary", user_id=str(uid))
                 if sent:
                     notified += 1
 
@@ -1228,7 +1251,7 @@ async def send_service_started_notification(db: AsyncSession):
         "title": "✅ Service Started",
         "body":  f"Fitness Tracker API restarted successfully at {ts}.",
         "url":   "/socialapp",
-    })
+    }, job="service_startup", user_id=str(_TEST_USER_ID))
     logger.info(f"STARTUP: service-started notification sent={sent} to user {_TEST_USER_ID}")
 
 
@@ -1277,7 +1300,7 @@ async def send_test_notification_to_user(db: AsyncSession):
     title = msg["title"].format(**fmt)
     body  = msg["body"].format(**fmt)
 
-    sent = await _push_all(db, subs, {"title": title, "body": body, "url": url})
+    sent = await _push_all(db, subs, {"title": title, "body": body, "url": url}, job="test_notification", user_id=str(_TEST_USER_ID))
     logger.info(
         f"TEST [{_test_msg_index + 1}/{len(_ALL_SAMPLE_MESSAGES)}] "
         f"pool={pool} sent={sent} | {title}"
@@ -1356,7 +1379,7 @@ async def send_body_scan_reminders(db: AsyncSession):
                 "title": title_tpl.format(name=name),
                 "body":  body_tpl.format(name=name),
                 "url":   "/socialapp/body-metrics",
-            })
+            }, job="body_scan_reminder", user_id=str(row["user_id"]))
             if sent:
                 notified += 1
         except Exception as e:
