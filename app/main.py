@@ -18,6 +18,9 @@ from app.api.habits import habits_router, challenges_router as habit_challenges_
 from app.api.home import router as home_router
 from app.api.coach import router as coach_router
 from app.api.feedback import router as feedback_router
+from app.api.googlefit import router as googlefit_router
+from app.api.notifications import router as notifications_router
+from app.api.partners import router as partners_router
 from fastapi.middleware.cors import CORSMiddleware
 from contextlib import asynccontextmanager
 import asyncio
@@ -111,6 +114,9 @@ app.include_router(habit_challenges_router)
 app.include_router(home_router)
 app.include_router(coach_router)
 app.include_router(feedback_router)
+app.include_router(googlefit_router)
+app.include_router(notifications_router)
+app.include_router(partners_router)
 app.include_router(admin_router)
 
 

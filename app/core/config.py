@@ -29,6 +29,10 @@ class Settings(BaseSettings):
     AZURE_OPENAI_API_KEY: str = ""
     AZURE_OPENAI_DEPLOYMENT: str = "gpt-5.3-chat"
     AZURE_OPENAI_API_VERSION: str = "2025-04-01-preview"
+
+    # Google OAuth (used for Google Fit sync)
+    GOOGLE_CLIENT_ID: str = os.getenv("GOOGLE_CLIENT_ID", os.getenv("NEXT_PUBLIC_GOOGLE_CLIENT_ID", ""))
+    GOOGLE_CLIENT_SECRET: str = os.getenv("GOOGLE_CLIENT_SECRET", "")
     
     class Config:
         env_file = BASE_DIR / ".env"

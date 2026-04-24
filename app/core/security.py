@@ -1,11 +1,30 @@
+import base64
 import hashlib
 import secrets
 import bcrypt
 from datetime import datetime, timedelta, timezone
 from fastapi import HTTPException, status
 from jose import JWTError, jwt
+from cryptography.fernet import Fernet
 
 from app.core.config import settings
+
+
+def _get_fernet() -> Fernet:
+    """Derive a stable Fernet key from JWT_SECRET."""
+    raw = hashlib.sha256(settings.JWT_SECRET.encode()).digest()
+    key = base64.urlsafe_b64encode(raw)
+    return Fernet(key)
+
+
+def encrypt_token(plaintext: str) -> str:
+    """Encrypt a plaintext string (e.g. OAuth token) for storage."""
+    return _get_fernet().encrypt(plaintext.encode()).decode()
+
+
+def decrypt_token(ciphertext: str) -> str:
+    """Decrypt a previously encrypted token."""
+    return _get_fernet().decrypt(ciphertext.encode()).decode()
 
 
 def hash_password(password: str) -> str:

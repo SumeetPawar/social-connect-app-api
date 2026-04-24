@@ -159,21 +159,22 @@ async def _push_all(
     sent = 0
     title = message.get("title", "")
     for sub in subscriptions:
-        result = send_web_push(
+        result, error_detail = send_web_push(
             {"endpoint": sub.endpoint, "keys": {"p256dh": sub.p256dh, "auth": sub.auth}},
             message,
         )
         uid = user_id or str(sub.user_id)
         # Log every attempt regardless of outcome
         await db.execute(text("""
-            INSERT INTO push_logs (user_id, job, result, title, endpoint_hash)
-            VALUES (:uid, :job, :result, :title, :ep)
+            INSERT INTO push_logs (user_id, job, result, title, endpoint_hash, error_detail)
+            VALUES (:uid, :job, :result, :title, :ep, :err)
         """), {
             "uid": uid,
             "job": job,
             "result": result,
             "title": title,
             "ep": sub.endpoint[-12:] if sub.endpoint else None,
+            "err": error_detail,
         })
         await db.commit()
 
@@ -932,6 +933,7 @@ async def send_habit_evening_nudge(db: AsyncSession):
 async def fire_habit_perfect_day(db: AsyncSession, user_id: str, challenge_id: int) -> None:
     """Fire a celebration push the moment a user completes every habit for today."""
     try:
+        from app.services.notification_service import write_inbox
         user_row = await db.execute(
             select(User).where(User.id == user_id)
         )
@@ -940,12 +942,26 @@ async def fire_habit_perfect_day(db: AsyncSession, user_id: str, challenge_id: i
             return
         name = (user.name or "there").split()[0]
         title_tpl, body_tpl = random.choice(_HABIT_PERFECT_DAY_POOL)
+        push_title = title_tpl.format(name=name)
+        push_body  = body_tpl.format(name=name)
         subs = await _get_subscriptions(db, user_id)
         await _push_all(db, subs, {
-            "title": title_tpl.format(name=name),
-            "body":  body_tpl.format(name=name),
+            "title": push_title,
+            "body":  push_body,
             "url":   "/socialapp/habits",
         }, job="perfect_day", user_id=str(user_id))
+        # Write to inbox — achievements never expire
+        await write_inbox(
+            db,
+            user_id=str(user_id),
+            type="perfect_day",
+            template_key="perfect_day_v1",
+            payload={"name": name},
+            action_url="/socialapp/habits",
+            push_title=push_title,
+            push_body=push_body,
+        )
+        await db.commit()
         logger.info(f"Perfect-day push sent to user {user_id} (challenge {challenge_id})")
     except Exception as e:
         logger.error(f"fire_habit_perfect_day error for user {user_id}: {e}")
@@ -956,6 +972,7 @@ async def fire_habit_perfect_day(db: AsyncSession, user_id: str, challenge_id: i
 async def fire_habit_streak_milestone(db: AsyncSession, user_id: str, streak: int) -> None:
     """Fire a milestone push when a user's habit streak reaches 3/7/14/21/30 days."""
     try:
+        from app.services.notification_service import write_inbox
         user_row = await db.execute(
             select(User).where(User.id == user_id)
         )
@@ -964,12 +981,26 @@ async def fire_habit_streak_milestone(db: AsyncSession, user_id: str, streak: in
             return
         name = (user.name or "there").split()[0]
         title_tpl, body_tpl = random.choice(_HABIT_MILESTONE_POOL)
+        push_title = title_tpl.format(name=name, streak=streak)
+        push_body  = body_tpl.format(name=name, streak=streak)
         subs = await _get_subscriptions(db, user_id)
         await _push_all(db, subs, {
-            "title": title_tpl.format(name=name, streak=streak),
-            "body":  body_tpl.format(name=name, streak=streak),
+            "title": push_title,
+            "body":  push_body,
             "url":   "/socialapp/habits",
         }, job="streak_milestone", user_id=str(user_id))
+        # Write to inbox — milestones never expire
+        await write_inbox(
+            db,
+            user_id=str(user_id),
+            type="habit_milestone",
+            template_key="habit_milestone_v1",
+            payload={"name": name, "streak": streak},
+            action_url="/socialapp/habits",
+            push_title=push_title,
+            push_body=push_body,
+        )
+        await db.commit()
         logger.info(f"Streak-milestone push ({streak} days) sent to user {user_id}")
     except Exception as e:
         logger.error(f"fire_habit_streak_milestone error for user {user_id}: {e}")
@@ -1018,14 +1049,29 @@ async def send_weekly_summary(db: AsyncSession):
                 continue
             name = (user.name or "there").split()[0]
             title_tpl, body_tpl = random.choice(_WEEKLY_SUMMARY_POOL)
+            push_title = title_tpl.format(name=name)
+            push_body  = body_tpl.format(name=name, steps=weekly_steps, habit_pct=habit_pct)
             subs = await _get_subscriptions(db, user.id)
             sent = await _push_all(db, subs, {
-                "title": title_tpl.format(name=name),
-                "body":  body_tpl.format(name=name, steps=weekly_steps, habit_pct=habit_pct),
+                "title": push_title,
+                "body":  push_body,
                 "url":   "/socialapp",
             }, job="weekly_summary", user_id=str(user.id))
             if sent:
                 notified += 1
+            # Write to inbox regardless of push delivery
+            from app.services.notification_service import write_inbox
+            await write_inbox(
+                db,
+                user_id=str(user.id),
+                type="weekly_summary",
+                template_key="weekly_summary_v1",
+                payload={"name": name, "steps": weekly_steps, "habit_pct": habit_pct},
+                action_url="/socialapp",
+                push_title=push_title,
+                push_body=push_body,
+            )
+            await db.commit()
         except Exception as e:
             logger.error(f"Weekly summary error for user {user.id}: {e}")
 
@@ -1098,14 +1144,30 @@ async def send_rank_change_notifications(db: AsyncSession):
                 name = (user.name or "there").split()[0]
                 pool = _RANK_UP_POOL if went_up else _RANK_DOWN_POOL
                 title_tpl, body_tpl = random.choice(pool)
+                push_title = title_tpl.format(name=name, rank=curr_rank, moved=moved, s=s)
+                push_body  = body_tpl.format(name=name, rank=curr_rank, moved=moved, s=s)
                 subs = await _get_subscriptions(db, uid)
                 sent = await _push_all(db, subs, {
-                    "title": title_tpl.format(name=name, rank=curr_rank, moved=moved, s=s),
-                    "body":  body_tpl.format(name=name, rank=curr_rank, moved=moved, s=s),
+                    "title": push_title,
+                    "body":  push_body,
                     "url":   f"/socialapp/challanges/{ch['id']}/steps",
                 }, job="rank_change", user_id=str(uid))
                 if sent:
                     notified += 1
+                # Only rank-up goes into inbox (rank-down is transient/demotivating to keep visible)
+                if went_up:
+                    from app.services.notification_service import write_inbox
+                    await write_inbox(
+                        db,
+                        user_id=uid,
+                        type="rank_up",
+                        template_key="rank_up_v1",
+                        payload={"name": name, "rank": curr_rank, "moved": moved},
+                        action_url=f"/socialapp/challanges/{ch['id']}/steps",
+                        push_title=push_title,
+                        push_body=push_body,
+                    )
+                    await db.commit()
         except Exception as e:
             logger.error(f"Rank change error for challenge {ch['id']}: {e}")
 
@@ -1188,21 +1250,41 @@ async def send_habit_cycle_summary(db: AsyncSession):
                 name = (row["user_name"] or "there").split()[0]
                 ps = "" if perfect_days == 1 else "s"
                 title_tpl, body_tpl = random.choice(_HABIT_CYCLE_POOL)
+                push_title = title_tpl.format(name=name)
+                push_body  = body_tpl.format(
+                    name=name,
+                    habit_pct=habit_pct,
+                    perfect_days=perfect_days,
+                    ps=ps,
+                    done_days=done_count,
+                    possible_days=possible,
+                )
                 subs = await _get_subscriptions(db, uid)
                 sent = await _push_all(db, subs, {
-                    "title": title_tpl.format(name=name),
-                    "body":  body_tpl.format(
-                        name=name,
-                        habit_pct=habit_pct,
-                        perfect_days=perfect_days,
-                        ps=ps,
-                        done_days=done_count,
-                        possible_days=possible,
-                    ),
-                    "url": "/socialapp/habits",
+                    "title": push_title,
+                    "body":  push_body,
+                    "url":   "/socialapp/habits",
                 }, job="habit_cycle_summary", user_id=str(uid))
                 if sent:
                     notified += 1
+                # Write to inbox — cycle summaries kept 90 days
+                from app.services.notification_service import write_inbox
+                await write_inbox(
+                    db,
+                    user_id=str(uid),
+                    type="habit_cycle",
+                    template_key="habit_cycle_v1",
+                    payload={
+                        "name":         name,
+                        "habit_pct":    habit_pct,
+                        "perfect_days": perfect_days,
+                        "done_days":    done_count,
+                        "possible_days": possible,
+                    },
+                    action_url="/socialapp/habits",
+                    push_title=push_title,
+                    push_body=push_body,
+                )
 
             # ── Mark challenge completed ──────────────────────────────────
             await db.execute(text("""
@@ -1362,9 +1444,9 @@ async def send_body_scan_reminders(db: AsyncSession):
             days_since = (today - row["last_scan"]).days
             if days_since > 60:
                 continue  # too long inactive — stop pestering
-            if days_since == 14:
+            if days_since == 22:
                 pool = _BODY_SCAN_DUE_POOL
-            elif days_since > 14 and (days_since - 14) % 3 == 0:
+            elif days_since > 22 and (days_since - 22) % 3 == 0:
                 pool = _BODY_SCAN_OVERDUE_POOL
             else:
                 continue  # not a reminder day

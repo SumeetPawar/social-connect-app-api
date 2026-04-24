@@ -372,7 +372,7 @@ scheduler.add_job(
 logger.info("Job configured: monthly challenge creation @ 23:55 last day of month")
 
 # 11. Body scan reminder — 08:00 IST daily
-# Fires on day 14 (due) and every 3 days after (overdue) up to day 60
+# Fires on day 22 (due) and every 3 days after (overdue) up to day 60
 async def body_scan_reminder_job():
     async with AsyncSessionLocal() as db:
         try:
@@ -388,6 +388,67 @@ scheduler.add_job(
     replace_existing=True,
 )
 logger.info("Job configured: body scan reminder @ 08:00 IST daily")
+
+# 12. Google Fit step sync — 4× daily (08:05, 13:05, 18:05, 22:05 IST)
+# Each run overwrites today's step count with the latest value from Google Fit.
+# Running at 10 PM captures most of the day; earlier runs keep the leaderboard fresh.
+async def google_fit_sync_job():
+    try:
+        from app.services.google_fit import sync_all_users
+        await sync_all_users()
+    except Exception as e:
+        logger.error(f"Error in Google Fit sync job: {e}", exc_info=True)
+
+
+for _gfit_hour, _gfit_id in [
+    (8,  'google_fit_sync_8am'),
+    (13, 'google_fit_sync_1pm'),
+    (18, 'google_fit_sync_6pm'),
+    (23, 'google_fit_sync_11pm'),
+]:
+    scheduler.add_job(
+        google_fit_sync_job,
+        CronTrigger(hour=_gfit_hour, minute=5, timezone="Asia/Kolkata"),
+        id=_gfit_id,
+        replace_existing=True,
+    )
+logger.info("Job configured: Google Fit step sync @ 08:05 / 13:05 / 18:05 / 23:05 IST daily")
+
+# 13. Nightly data cleanup — 00:10 IST daily
+# Deletes expired notification_inbox rows, old partner_nudge_events, and old push_logs.
+async def nightly_cleanup_job():
+    try:
+        from app.db.session import AsyncSessionLocal
+        from sqlalchemy import text
+        async with AsyncSessionLocal() as db:
+            # Expired inbox rows
+            r1 = await db.execute(text(
+                "DELETE FROM notification_inbox WHERE expires_at < now()"
+            ))
+            # Partner nudge events older than 90 days
+            r2 = await db.execute(text(
+                "DELETE FROM partner_nudge_events WHERE sent_at < now() - INTERVAL '90 days'"
+            ))
+            # Push logs older than 30 days
+            r3 = await db.execute(text(
+                "DELETE FROM push_logs WHERE sent_at < now() - INTERVAL '30 days'"
+            ))
+            await db.commit()
+            logger.info(
+                f"Nightly cleanup: inbox={r1.rowcount} expired, "
+                f"nudge_events={r2.rowcount} old, push_logs={r3.rowcount} old"
+            )
+    except Exception as e:
+        logger.error(f"Error in nightly cleanup job: {e}", exc_info=True)
+
+
+scheduler.add_job(
+    nightly_cleanup_job,
+    CronTrigger(hour=0, minute=10, timezone="Asia/Kolkata"),
+    id='nightly_cleanup',
+    replace_existing=True,
+)
+logger.info("Job configured: nightly data cleanup @ 00:10 IST daily")
 
 # scheduler.add_job(
 #     _test_notification_job,

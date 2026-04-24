@@ -18,10 +18,11 @@ class PushResult:
     ERROR = "error"      # any other failure
 
 
-def send_web_push(subscription_info: dict, message: dict) -> str:
+def send_web_push(subscription_info: dict, message: dict) -> tuple[str, str | None]:
     """
     Send a push notification.
-    Returns PushResult.OK / PushResult.EXPIRED / PushResult.ERROR.
+    Returns (PushResult, error_detail) where error_detail is None on success.
+    error_detail format: "HTTP 401: Unauthorized" or "Exception: <msg>"
     Callers should delete the subscription from DB when EXPIRED is returned.
     """
     try:
@@ -31,14 +32,21 @@ def send_web_push(subscription_info: dict, message: dict) -> str:
             vapid_private_key=VAPID_PRIVATE_KEY,
             vapid_claims=VAPID_CLAIMS,
         )
-        return PushResult.OK
+        return PushResult.OK, None
     except WebPushException as ex:
         status = ex.response.status_code if ex.response is not None else None
+        body = ""
+        try:
+            body = ex.response.text[:120] if ex.response is not None else ""
+        except Exception:
+            pass
+        detail = f"HTTP {status}: {body}" if status else f"WebPushException: {ex}"
         logger.warning(f"WebPushException (HTTP {status}): {ex}")
         # 404 = endpoint gone, 410 = explicitly unsubscribed — both mean: delete this sub
         if status in (404, 410):
-            return PushResult.EXPIRED
-        return PushResult.ERROR
+            return PushResult.EXPIRED, detail
+        return PushResult.ERROR, detail
     except Exception as ex:
+        detail = f"Exception: {str(ex)[:120]}"
         logger.error(f"Unexpected push error: {ex}")
-        return PushResult.ERROR
+        return PushResult.ERROR, detail

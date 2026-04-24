@@ -632,3 +632,98 @@ class UserFeedback(Base):
     status:     Mapped[str]      = mapped_column(Text, nullable=False, server_default=text("'open'"))
     meta:       Mapped[dict | None] = mapped_column(JSONB, nullable=True)    # app version, screen, etc.
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+
+# ==========================================
+# 11. GOOGLE FIT INTEGRATION
+# ==========================================
+
+class UserGoogleFitToken(Base):
+    """
+    Stores encrypted Google OAuth tokens for each user.
+    One row per user (user_id is the primary key).
+    access_token and refresh_token are Fernet-encrypted at rest.
+    """
+    __tablename__ = "user_google_fit_tokens"
+
+    user_id:       Mapped[str]      = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("users.id", ondelete="CASCADE"),
+        primary_key=True,
+    )
+    access_token:  Mapped[str]      = mapped_column(Text, nullable=False)   # encrypted
+    refresh_token: Mapped[str]      = mapped_column(Text, nullable=False)   # encrypted
+    expires_at:    Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    created_at:    Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+    updated_at:    Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+
+
+# ==========================================
+# 12. NOTIFICATIONS & SOCIAL
+# ==========================================
+
+class NotificationInbox(Base):
+    """
+    User-facing in-app notification inbox.
+    Only inbox-worthy events are stored here (achievements, social, summaries).
+    Transient daily nudges (step reminders, streak alerts) are push-only.
+
+    template_key  — frontend picks the render template from this key
+    payload       — dynamic variables the frontend injects into the template
+    push_title/push_body — frozen snapshot of the push text sent at fire time
+    expires_at    — NULL = never expires (milestones/achievements)
+    """
+    __tablename__ = "notification_inbox"
+
+    id:            Mapped[int]           = mapped_column(Integer, primary_key=True)
+    user_id:       Mapped[str]           = mapped_column(UUID(as_uuid=True), ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
+    type:          Mapped[str]           = mapped_column(Text, nullable=False)
+    actor_user_id: Mapped[str | None]    = mapped_column(UUID(as_uuid=True), ForeignKey("users.id", ondelete="SET NULL"), nullable=True)
+    actor_name:    Mapped[str | None]    = mapped_column(Text, nullable=True)
+    template_key:  Mapped[str]           = mapped_column(Text, nullable=False)
+    payload:       Mapped[dict]          = mapped_column(JSONB, nullable=False, server_default=text("'{}'"))
+    action_url:    Mapped[str | None]    = mapped_column(Text, nullable=True)
+    push_title:    Mapped[str | None]    = mapped_column(Text, nullable=True)
+    push_body:     Mapped[str | None]    = mapped_column(Text, nullable=True)
+    is_read:       Mapped[bool]          = mapped_column(Boolean, nullable=False, server_default=text("false"))
+    created_at:    Mapped[datetime]      = mapped_column(DateTime(timezone=True), server_default=func.now())
+    expires_at:    Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+
+class AccountabilityPartner(Base):
+    """
+    Bi-directional accountability partner relationship.
+    status: pending | approved | rejected | blocked
+    The pair (requester_id, partner_id) is unique — no duplicate requests.
+    """
+    __tablename__ = "accountability_partners"
+    __table_args__ = (
+        UniqueConstraint("requester_id", "partner_id", name="uq_partner_pair"),
+    )
+
+    id:           Mapped[int]           = mapped_column(Integer, primary_key=True)
+    requester_id: Mapped[str]           = mapped_column(UUID(as_uuid=True), ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
+    partner_id:   Mapped[str]           = mapped_column(UUID(as_uuid=True), ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
+    status:       Mapped[str]           = mapped_column(Text, nullable=False, server_default=text("'pending'"))
+    approved_at:  Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    created_at:   Mapped[datetime]      = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+
+class PartnerNudgeEvent(Base):
+    """
+    One row per nudge sent. Dual unique constraints enforce:
+      - Max 1 nudge received per user per day
+      - Sender cannot nudge same person twice in one day
+    Retained 90 days for abuse review.
+    """
+    __tablename__ = "partner_nudge_events"
+    __table_args__ = (
+        UniqueConstraint("receiver_id", "local_day", name="uq_nudge_receiver_day"),
+        UniqueConstraint("sender_id", "receiver_id", "local_day", name="uq_nudge_sender_receiver_day"),
+    )
+
+    id:          Mapped[int]      = mapped_column(Integer, primary_key=True)
+    sender_id:   Mapped[str]      = mapped_column(UUID(as_uuid=True), ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
+    receiver_id: Mapped[str]      = mapped_column(UUID(as_uuid=True), ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
+    local_day:   Mapped[date]     = mapped_column(Date, nullable=False)
+    sent_at:     Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())

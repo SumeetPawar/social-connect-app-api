@@ -166,7 +166,8 @@ async def main(days: int):
 
         # -- 5. recent 20 entries ---------------------------------------------
         recent_rows = (await db.execute(text("""
-            SELECT pl.job, pl.result, pl.title, pl.sent_at, u.name AS uname
+            SELECT pl.job, pl.result, pl.title, pl.sent_at, u.name AS uname,
+                   pl.error_detail
             FROM push_logs pl
             JOIN users u ON u.id = pl.user_id
             WHERE pl.sent_at >= :since
@@ -182,6 +183,8 @@ async def main(days: int):
             ts    = str(r["sent_at"])[:16]
             title = (r["title"] or "")[:40]
             print(f"  {icon} {DIM}{ts}{RESET}  {r['job']:<26}  {DIM}{r['uname'][:12]:<12}{RESET}  {title}")
+            if r["result"] == "error" and r["error_detail"]:
+                print(f"       {RED}└─ {r['error_detail']}{RESET}")
 
         print(f"\n{'='*62}\n")
 
