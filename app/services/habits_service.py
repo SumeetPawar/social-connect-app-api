@@ -5,7 +5,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 from fastapi import HTTPException
 
-from app.models import HabitChallenge, ChallengeStatus, DailyLog, Habit, HabitCommitment, User
+from app.models import HabitChallenge, ChallengeStatus, DailyLog, Habit, HabitCommitment, UserHabit, User
 from app.schemas.habits import ChallengeCreate
 from app.services.reminder_service import fire_habit_perfect_day, fire_habit_streak_milestone
 
@@ -113,6 +113,14 @@ async def _get_habit(db: AsyncSession, slug: str) -> Habit:
 
 
 async def create_challenge(db: AsyncSession, user_id: str, body: ChallengeCreate) -> HabitChallenge:
+    # Validate custom habit IDs belong to this user
+    for uid in body.custom_habit_ids:
+        uh = (await db.execute(
+            select(UserHabit).where(UserHabit.id == uid, UserHabit.user_id == user_id)
+        )).scalar_one_or_none()
+        if not uh:
+            raise HTTPException(404, f"Custom habit {uid} not found")
+
     # Abandon any existing active challenge
     result = await db.execute(
         select(HabitChallenge).where(
@@ -133,9 +141,15 @@ async def create_challenge(db: AsyncSession, user_id: str, body: ChallengeCreate
     db.add(challenge)
     await db.flush()
 
-    for order, slug in enumerate(body.habit_slugs):
+    order = 0
+    for slug in body.habit_slugs:
         habit = await _get_habit(db, slug)
         db.add(HabitCommitment(challenge_id=challenge.id, habit_id=habit.id, sort_order=order))
+        order += 1
+
+    for uid in body.custom_habit_ids:
+        db.add(HabitCommitment(challenge_id=challenge.id, user_habit_id=uid, sort_order=order))
+        order += 1
 
     await db.commit()
     await db.refresh(challenge)
@@ -147,6 +161,7 @@ async def get_active_challenge(db: AsyncSession, user_id: str) -> HabitChallenge
         select(HabitChallenge)
         .options(
             selectinload(HabitChallenge.commitments).selectinload(HabitCommitment.habit),
+            selectinload(HabitChallenge.commitments).selectinload(HabitCommitment.user_habit),
             selectinload(HabitChallenge.commitments).selectinload(HabitCommitment.logs),
         )
         .where(
@@ -166,9 +181,35 @@ async def get_today(db: AsyncSession, user_id: str, target_date: date | None = N
     habits_today = []
     for c in sorted(challenge.commitments, key=lambda x: x.sort_order):
         log = next((l for l in c.logs if l.logged_date == today), None)
+        if c.user_habit:
+            habit_data = {
+                "commitment_id": c.id,
+                "is_custom": True,
+                "user_habit_id": c.user_habit_id,
+                "name": c.user_habit.name,
+                "emoji": c.user_habit.emoji,
+                "has_counter": False,
+            }
+        else:
+            h = c.habit
+            habit_data = {
+                "commitment_id": c.id,
+                "is_custom": False,
+                "habit_id": c.habit_id,
+                "name": h.label,
+                "slug": h.slug,
+                "description": h.description,
+                "why": h.why,
+                "impact": h.impact,
+                "category": h.category,
+                "tier": h.tier,
+                "has_counter": h.has_counter,
+                "unit": h.unit,
+                "target": h.target,
+            }
         habits_today.append({
             "commitment_id": c.id,
-            "habit": c.habit,
+            "habit": habit_data,
             "completed": log.completed if log else False,
             "value": log.value if log else None,
             "log_id": log.id if log else None,

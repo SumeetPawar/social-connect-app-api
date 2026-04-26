@@ -80,7 +80,7 @@ async def write_inbox(
                  payload, action_url, push_title, push_body, expires_at)
             VALUES
                 (:user_id, :type, :actor_user_id, :actor_name, :template_key,
-                 :payload::jsonb, :action_url, :push_title, :push_body, :expires_at)
+                 CAST(:payload AS jsonb), :action_url, :push_title, :push_body, :expires_at)
         """), {
             "user_id":       str(user_id),
             "type":          type,

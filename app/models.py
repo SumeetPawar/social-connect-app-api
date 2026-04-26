@@ -50,7 +50,12 @@ class User(Base):
         nullable=False
     )
     profile_pic_url: Mapped[str | None] = mapped_column(Text, nullable=True)
-    
+
+    # Partner pairing preferences / queue
+    partner_opt_out: Mapped[bool]         = mapped_column(Boolean, nullable=False, server_default=text("false"))
+    seeking_partner: Mapped[bool]         = mapped_column(Boolean, nullable=False, server_default=text("false"))
+    seeking_since:   Mapped[datetime|None]= mapped_column(DateTime(timezone=True), nullable=True)
+
     # Global streak tracking
     global_current_streak: Mapped[int] = mapped_column(Integer, nullable=False, server_default=text("0"))
     global_longest_streak: Mapped[int] = mapped_column(Integer, nullable=False, server_default=text("0"))
@@ -499,18 +504,36 @@ class HabitChallenge(Base):
     commitments: Mapped[list["HabitCommitment"]] = relationship(back_populates="challenge", cascade="all, delete-orphan")
 
 
+class UserHabit(Base):
+    """User-defined custom habits (not from the built-in library)."""
+    __tablename__ = "user_habits"
+
+    id:         Mapped[int]      = mapped_column(Integer, primary_key=True)
+    user_id:    Mapped[str]      = mapped_column(UUID(as_uuid=True), ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
+    name:       Mapped[str]      = mapped_column(Text, nullable=False)
+    emoji:      Mapped[str|None] = mapped_column(String(8), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+
+    commitments: Mapped[list["HabitCommitment"]] = relationship(back_populates="user_habit")
+
+
 class HabitCommitment(Base):
     __tablename__ = "habit_commitments"
-    __table_args__ = (UniqueConstraint("challenge_id", "habit_id"),)
+    __table_args__ = (
+        UniqueConstraint("challenge_id", "habit_id"),
+        UniqueConstraint("challenge_id", "user_habit_id", name="uq_commitment_user_habit"),
+    )
 
-    id:           Mapped[int] = mapped_column(Integer, primary_key=True)
-    challenge_id: Mapped[int] = mapped_column(Integer, ForeignKey("habit_challenges.id", ondelete="CASCADE"))
-    habit_id:     Mapped[int] = mapped_column(Integer, ForeignKey("habits.id"))
-    sort_order:   Mapped[int] = mapped_column(Integer, default=0)
+    id:             Mapped[int]      = mapped_column(Integer, primary_key=True)
+    challenge_id:   Mapped[int]      = mapped_column(Integer, ForeignKey("habit_challenges.id", ondelete="CASCADE"))
+    habit_id:       Mapped[int|None] = mapped_column(Integer, ForeignKey("habits.id"), nullable=True)
+    user_habit_id:  Mapped[int|None] = mapped_column(Integer, ForeignKey("user_habits.id", ondelete="CASCADE"), nullable=True)
+    sort_order:     Mapped[int]      = mapped_column(Integer, default=0)
 
-    challenge: Mapped["HabitChallenge"]  = relationship(back_populates="commitments")
-    habit:     Mapped["Habit"]          = relationship(back_populates="commitments")
-    logs:      Mapped[list["DailyLog"]] = relationship(back_populates="commitment", cascade="all, delete-orphan")
+    challenge:  Mapped["HabitChallenge"]       = relationship(back_populates="commitments")
+    habit:      Mapped["Habit|None"]           = relationship(back_populates="commitments")
+    user_habit: Mapped["UserHabit|None"]       = relationship(back_populates="commitments")
+    logs:       Mapped[list["DailyLog"]]       = relationship(back_populates="commitment", cascade="all, delete-orphan")
 
 
 class DailyLog(Base):
@@ -693,7 +716,8 @@ class NotificationInbox(Base):
 class AccountabilityPartner(Base):
     """
     Bi-directional accountability partner relationship.
-    status: pending | approved | rejected | blocked
+    status: pending | approved | rejected | blocked | completed | reshuffled
+    assignment_type: manual | admin | auto
     The pair (requester_id, partner_id) is unique — no duplicate requests.
     """
     __tablename__ = "accountability_partners"
@@ -701,26 +725,48 @@ class AccountabilityPartner(Base):
         UniqueConstraint("requester_id", "partner_id", name="uq_partner_pair"),
     )
 
-    id:           Mapped[int]           = mapped_column(Integer, primary_key=True)
-    requester_id: Mapped[str]           = mapped_column(UUID(as_uuid=True), ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
-    partner_id:   Mapped[str]           = mapped_column(UUID(as_uuid=True), ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
-    status:       Mapped[str]           = mapped_column(Text, nullable=False, server_default=text("'pending'"))
-    approved_at:  Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
-    created_at:   Mapped[datetime]      = mapped_column(DateTime(timezone=True), server_default=func.now())
+    id:              Mapped[int]            = mapped_column(Integer, primary_key=True)
+    requester_id:    Mapped[str]            = mapped_column(UUID(as_uuid=True), ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
+    partner_id:      Mapped[str]            = mapped_column(UUID(as_uuid=True), ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
+    status:          Mapped[str]            = mapped_column(Text, nullable=False, server_default=text("'pending'"))
+    approved_at:     Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    created_at:      Mapped[datetime]       = mapped_column(DateTime(timezone=True), server_default=func.now())
+    # Assignment metadata
+    assigned_by:     Mapped[str | None]     = mapped_column(UUID(as_uuid=True), ForeignKey("users.id", ondelete="SET NULL"), nullable=True)
+    assignment_type: Mapped[str]            = mapped_column(Text, nullable=False, server_default=text("'manual'"))
+    week_start:      Mapped[date | None]    = mapped_column(Date, nullable=True)
+    # Keep-or-change votes (set Fri–Sun; NULL = no response)
+    requester_keep:  Mapped[bool | None]    = mapped_column(Boolean, nullable=True)
+    partner_keep:    Mapped[bool | None]    = mapped_column(Boolean, nullable=True)
+    keep_deadline:   Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+
+class PartnerMessage(Base):
+    """
+    Chat messages between accountability partners.
+    expires_at is set when the pair ends (completed/reshuffled) + 30 days.
+    Nightly job deletes rows where expires_at < now().
+    """
+    __tablename__ = "partner_messages"
+
+    id:          Mapped[int]            = mapped_column(Integer, primary_key=True)
+    pair_id:     Mapped[int]            = mapped_column(Integer, ForeignKey("accountability_partners.id", ondelete="CASCADE"), nullable=False)
+    sender_id:   Mapped[str]            = mapped_column(UUID(as_uuid=True), ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
+    receiver_id: Mapped[str]            = mapped_column(UUID(as_uuid=True), ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
+    body:        Mapped[str]            = mapped_column(Text, nullable=False)
+    sent_at:     Mapped[datetime]       = mapped_column(DateTime(timezone=True), server_default=func.now())
+    read_at:     Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    expires_at:  Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
 
 class PartnerNudgeEvent(Base):
     """
-    One row per nudge sent. Dual unique constraints enforce:
-      - Max 1 nudge received per user per day
-      - Sender cannot nudge same person twice in one day
+    One row per nudge sent. Unique constraint enforces:
+      - Sender cannot nudge same person twice in one day (dedup)
+    Count of rows per receiver per day enforces the 5-nudge daily cap (app logic).
     Retained 90 days for abuse review.
     """
     __tablename__ = "partner_nudge_events"
-    __table_args__ = (
-        UniqueConstraint("receiver_id", "local_day", name="uq_nudge_receiver_day"),
-        UniqueConstraint("sender_id", "receiver_id", "local_day", name="uq_nudge_sender_receiver_day"),
-    )
 
     id:          Mapped[int]      = mapped_column(Integer, primary_key=True)
     sender_id:   Mapped[str]      = mapped_column(UUID(as_uuid=True), ForeignKey("users.id", ondelete="CASCADE"), nullable=False)

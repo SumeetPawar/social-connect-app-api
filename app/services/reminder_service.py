@@ -1469,3 +1469,221 @@ async def send_body_scan_reminders(db: AsyncSession):
 
     logger.info(f"Body scan reminder: notified {notified} users")
     return notified
+
+
+# ─── Weekly partner rotation ──────────────────────────────────────────────────
+
+_IST = ZoneInfo("Asia/Kolkata")
+
+
+async def send_partner_keep_or_change_prompts(db: AsyncSession) -> int:
+    """
+    Friday 08:00 IST job — send Keep/Change vote prompts to all active auto-managed pairs.
+    Sets keep_deadline = Sunday 23:59 IST on each pair.
+    """
+    from app.services.notification_service import write_inbox
+
+    # Sunday 23:59 IST this week
+    now_ist = datetime.now(_IST)
+    days_until_sunday = (6 - now_ist.weekday()) % 7 or 7
+    sunday = now_ist.replace(hour=23, minute=59, second=0, microsecond=0) + timedelta(days=days_until_sunday)
+    # Convert to UTC for storage
+    sunday_utc = sunday.astimezone(ZoneInfo("UTC"))
+
+    pairs = (await db.execute(text("""
+        SELECT ap.id, ap.requester_id, ap.partner_id,
+               u1.name AS req_name, u2.name AS par_name
+        FROM   accountability_partners ap
+        JOIN   users u1 ON u1.id = ap.requester_id
+        JOIN   users u2 ON u2.id = ap.partner_id
+        WHERE  ap.status = 'approved'
+          AND  ap.week_start IS NOT NULL
+          AND  (ap.keep_deadline IS NULL OR ap.keep_deadline < now())
+    """))).mappings().all()
+
+    notified = 0
+    for p in pairs:
+        await db.execute(text("""
+            UPDATE accountability_partners
+            SET keep_deadline  = :dl,
+                requester_keep = NULL,
+                partner_keep   = NULL
+            WHERE id = :pid
+        """), {"dl": sunday_utc, "pid": p["id"]})
+
+        for uid, partner_name in (
+            (str(p["requester_id"]), (p["par_name"] or "your partner").split()[0]),
+            (str(p["partner_id"]),   (p["req_name"] or "your partner").split()[0]),
+        ):
+            subs = await _get_subscriptions(db, uid)
+            await _push_all(db, subs, {
+                "title": "Keep or change your partner?",
+                "body":  f"Your week with {partner_name} ends Sunday. Tap to vote.",
+                "url":   f"/socialapp/partners",
+            }, job="partner_keep_vote", user_id=uid)
+
+            await write_inbox(
+                db,
+                user_id=uid,
+                type="partner_keep_vote",
+                template_key="partner_keep_vote_v1",
+                payload={"partner_name": partner_name, "pair_id": p["id"]},
+                action_url="/socialapp/partners",
+            )
+        notified += 1
+
+    await db.commit()
+    logger.info("Partner keep-vote prompts sent for %d pairs", notified)
+    return notified
+
+
+async def run_weekly_partner_rotation(db: AsyncSession) -> int:
+    """
+    Monday 07:00 IST job — rotate or renew partner pairs.
+
+    For each pair where keep_deadline has passed:
+      - Both voted keep=True  → renew (update week_start, reset votes)
+      - Any other outcome     → complete old pair, assign new partner from dept active pool
+    """
+    from app.services.notification_service import write_inbox
+    from sqlalchemy import select as sa_select
+    import random as _random
+
+    today = date.today()
+
+    expired_pairs = (await db.execute(text("""
+        SELECT ap.id,
+               ap.requester_id, ap.partner_id,
+               ap.requester_keep, ap.partner_keep,
+               u1.department_id AS dept_id,
+               u1.name AS req_name, u2.name AS par_name
+        FROM   accountability_partners ap
+        JOIN   users u1 ON u1.id = ap.requester_id
+        JOIN   users u2 ON u2.id = ap.partner_id
+        WHERE  ap.status = 'approved'
+          AND  ap.keep_deadline IS NOT NULL
+          AND  ap.keep_deadline < now()
+    """))).mappings().all()
+
+    rotated = 0
+
+    for p in expired_pairs:
+        both_keep = p["requester_keep"] is True and p["partner_keep"] is True
+
+        if both_keep:
+            # Renew: reset votes and push week forward
+            await db.execute(text("""
+                UPDATE accountability_partners
+                SET week_start     = :ws,
+                    requester_keep = NULL,
+                    partner_keep   = NULL,
+                    keep_deadline  = NULL
+                WHERE id = :pid
+            """), {"ws": today, "pid": p["id"]})
+
+            for uid, partner_name in (
+                (str(p["requester_id"]), (p["par_name"] or "partner").split()[0]),
+                (str(p["partner_id"]),   (p["req_name"] or "partner").split()[0]),
+            ):
+                subs = await _get_subscriptions(db, uid)
+                await _push_all(db, subs, {
+                    "title": f"Continuing with {partner_name}!",
+                    "body":  "You both voted to keep going. Let's have a great week!",
+                    "url":   "/socialapp/partners",
+                }, job="partner_renewed", user_id=uid)
+                await write_inbox(
+                    db, user_id=uid, type="partner_renewed",
+                    template_key="partner_renewed_v1",
+                    payload={"partner_name": partner_name},
+                    action_url="/socialapp/partners",
+                )
+        else:
+            # Rotate: mark old pair completed, assign new partner
+            await db.execute(text("""
+                UPDATE accountability_partners SET status = 'completed' WHERE id = :pid
+            """), {"pid": p["id"]})
+            await db.execute(text("""
+                UPDATE partner_messages
+                SET expires_at = now() + INTERVAL '30 days'
+                WHERE pair_id = :pid AND expires_at IS NULL
+            """), {"pid": p["id"]})
+
+            dept_id = str(p["dept_id"])
+            # Find active users in dept not already paired, excluding the current pair members
+            active_candidates = (await db.execute(text("""
+                SELECT u.id, u.name
+                FROM users u
+                WHERE u.department_id = :dept
+                  AND u.id NOT IN (:req, :par)
+                  AND u.id NOT IN (
+                      SELECT requester_id FROM accountability_partners WHERE status = 'approved'
+                      UNION
+                      SELECT partner_id   FROM accountability_partners WHERE status = 'approved'
+                  )
+                  AND (
+                      EXISTS (SELECT 1 FROM daily_steps ds WHERE ds.user_id = u.id AND ds.day >= current_date - 7)
+                      OR EXISTS (
+                          SELECT 1 FROM daily_logs dl
+                          JOIN   habit_commitments hcm ON hcm.id = dl.commitment_id
+                          JOIN   habit_challenges  hc  ON hc.id  = hcm.challenge_id
+                          WHERE  hc.user_id = u.id AND dl.logged_date >= current_date - 7
+                      )
+                      OR u.created_at >= now() - INTERVAL '7 days'
+                  )
+                ORDER BY random()
+                LIMIT 1
+            """), {"dept": dept_id, "req": str(p["requester_id"]), "par": str(p["partner_id"])})).mappings().all()
+
+            # Re-pair each user from the old pair
+            for uid, old_partner_name in (
+                (str(p["requester_id"]), (p["par_name"] or "partner").split()[0]),
+                (str(p["partner_id"]),   (p["req_name"] or "partner").split()[0]),
+            ):
+                new_candidate = active_candidates[0] if active_candidates else None
+
+                if new_candidate:
+                    new_partner_id   = str(new_candidate["id"])
+                    new_partner_name = (new_candidate["name"] or "Someone").split()[0]
+
+                    await db.execute(text("""
+                        INSERT INTO accountability_partners
+                            (requester_id, partner_id, status, assignment_type, approved_at, week_start)
+                        VALUES (:a, :b, 'approved', 'auto', now(), :ws)
+                        ON CONFLICT (requester_id, partner_id) DO UPDATE
+                            SET status = 'approved', assignment_type = 'auto',
+                                approved_at = now(), week_start = :ws
+                    """), {"a": uid, "b": new_partner_id, "ws": today})
+
+                    subs = await _get_subscriptions(db, uid)
+                    await _push_all(db, subs, {
+                        "title": f"Meet your new partner: {new_partner_name}!",
+                        "body":  "Your accountability partner for this week is ready. Say hi!",
+                        "url":   "/socialapp/partners",
+                    }, job="partner_rotated", user_id=uid)
+                    await write_inbox(
+                        db, user_id=uid, type="partner_rotated",
+                        template_key="partner_rotated_v1",
+                        payload={"partner_name": new_partner_name, "partner_id": new_partner_id},
+                        action_url="/socialapp/partners",
+                    )
+                else:
+                    # No available partner — notify admin via inbox (best effort)
+                    logger.warning("No available partner for user %s after rotation", uid)
+
+        rotated += 1
+
+    await db.commit()
+    logger.info("Weekly partner rotation: processed %d pairs", rotated)
+    return rotated
+
+
+async def cleanup_expired_partner_messages(db: AsyncSession) -> int:
+    """Nightly job — delete partner_messages where expires_at < now()."""
+    result = await db.execute(text("""
+        DELETE FROM partner_messages WHERE expires_at < now()
+        RETURNING id
+    """))
+    deleted = len(result.fetchall())
+    await db.commit()
+    logger.info("Cleaned up %d expired partner messages", deleted)
+    return deleted

@@ -14,6 +14,9 @@ from app.services.reminder_service import (
     send_rank_change_notifications,
     send_habit_cycle_summary,
     send_body_scan_reminders,
+    send_partner_keep_or_change_prompts,
+    run_weekly_partner_rotation,
+    cleanup_expired_partner_messages,
 )
 from app.services.ai_insight import generate_nightly_insights
 import logging
@@ -449,6 +452,60 @@ scheduler.add_job(
     replace_existing=True,
 )
 logger.info("Job configured: nightly data cleanup @ 00:10 IST daily")
+
+
+# ─── Weekly partner rotation jobs ────────────────────────────────────────────
+
+async def partner_keep_vote_job():
+    """Friday 08:00 IST — ask active pairs to vote keep or change."""
+    async with AsyncSessionLocal() as db:
+        try:
+            await send_partner_keep_or_change_prompts(db)
+        except Exception as e:
+            logger.error(f"Error in partner keep-vote job: {e}", exc_info=True)
+
+
+async def partner_rotation_job():
+    """Monday 07:00 IST — rotate or renew all pairs based on votes."""
+    async with AsyncSessionLocal() as db:
+        try:
+            await run_weekly_partner_rotation(db)
+        except Exception as e:
+            logger.error(f"Error in partner rotation job: {e}", exc_info=True)
+
+
+async def partner_message_cleanup_job():
+    """Nightly — delete expired partner messages (30 days after pair ends)."""
+    async with AsyncSessionLocal() as db:
+        try:
+            await cleanup_expired_partner_messages(db)
+        except Exception as e:
+            logger.error(f"Error in partner message cleanup job: {e}", exc_info=True)
+
+
+scheduler.add_job(
+    partner_keep_vote_job,
+    CronTrigger(day_of_week='fri', hour=8, minute=0, timezone="Asia/Kolkata"),
+    id='partner_keep_vote_prompt',
+    replace_existing=True,
+)
+logger.info("Job configured: partner keep-vote prompt @ 08:00 IST every Friday")
+
+scheduler.add_job(
+    partner_rotation_job,
+    CronTrigger(day_of_week='mon', hour=7, minute=0, timezone="Asia/Kolkata"),
+    id='weekly_partner_rotation',
+    replace_existing=True,
+)
+logger.info("Job configured: weekly partner rotation @ 07:00 IST every Monday")
+
+scheduler.add_job(
+    partner_message_cleanup_job,
+    CronTrigger(hour=0, minute=20, timezone="Asia/Kolkata"),
+    id='partner_message_cleanup',
+    replace_existing=True,
+)
+logger.info("Job configured: partner message cleanup @ 00:20 IST daily")
 
 # scheduler.add_job(
 #     _test_notification_job,

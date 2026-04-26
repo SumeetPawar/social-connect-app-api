@@ -194,8 +194,8 @@ async def list_departments():
         print(f"{row['id']} | {row['name']}")
     await conn.close()
 
-# DB_URL = os.environ.get('DATABASE_URL', 'postgresql://fitness:fitnesspass@localhost:5432/fitnessdb')
-DB_URL = 'postgresql://gesadmin:Markmywords%4089@ges-social-pg-prod.postgres.database.azure.com/fitness_tracker'
+DB_URL = os.environ.get('DATABASE_URL', 'postgresql://fitness:fitnesspass@localhost:5432/fitnessdb')
+# DB_URL = 'postgresql://gesadmin:Markmywords%4089@ges-social-pg-prod.postgres.database.azure.com/fitness_tracker'
 
 # ── Google Fit admin helpers ────────────────────────────────────────────────
 async def list_googlefit_connections():

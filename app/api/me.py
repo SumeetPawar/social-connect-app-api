@@ -9,6 +9,10 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.schemas.profile import ProfileOut, ProfileUpdate
 
+
+class MePatch(BaseModel):
+    partner_opt_out: Optional[bool] = None
+
 router = APIRouter(prefix="/api/me", tags=["me"])
 
 
@@ -65,6 +69,19 @@ async def me(
         activity_level = user.activity_level,
         height_cm      = float(user.height_cm) if user.height_cm is not None else None,
     )
+
+
+@router.patch("", status_code=200)
+async def patch_me(
+    data: MePatch,
+    user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Update user-level preferences (partner opt-out, etc.)."""
+    if data.partner_opt_out is not None:
+        user.partner_opt_out = data.partner_opt_out
+    await db.commit()
+    return {"status": "ok"}
 
 
 # ─── /profile kept for backwards compat ──────────────────────────────────────

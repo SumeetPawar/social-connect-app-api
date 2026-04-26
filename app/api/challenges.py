@@ -180,162 +180,122 @@ async def list_challenges(
     )
 
 @router.get("/{challenge_id}/my-progress")
-async def get_my_challenge_week_progress(
+async def get_my_challenge_month_progress(
     challenge_id: UUID,
-    start_date: date = Query(..., description="Week start date (Monday)"),
-    end_date: date = Query(..., description="Week end date (Sunday)"),
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db)
 ):
     """
-    Get user's steps for a specific week within a specific challenge
+    Get user's steps for the full challenge period (monthly view).
+    No date params needed — uses the challenge's own start/end dates.
     """
-    
+
     # Get challenge info
     challenge_query = text("""
         SELECT id, title, start_date, end_date, status, period, scope
         FROM challenges
         WHERE id = :challenge_id
     """)
-    
+
     result = await db.execute(challenge_query, {"challenge_id": challenge_id})
     challenge = result.mappings().first()
-    
+
     if not challenge:
         raise HTTPException(status_code=404, detail="Challenge not found")
-    
+
     # Get user's daily target AND streak info (READ ONLY - already saved)
     participant_query = text("""
-        SELECT 
+        SELECT
             selected_daily_target,
             challenge_current_streak,
             challenge_longest_streak,
             last_activity_date
         FROM challenge_participants
-        WHERE challenge_id = :challenge_id 
-        AND user_id = :user_id 
+        WHERE challenge_id = :challenge_id
+        AND user_id = :user_id
         AND left_at IS NULL
     """)
-    
+
     result = await db.execute(
-        participant_query, 
+        participant_query,
         {"challenge_id": challenge_id, "user_id": current_user.id}
     )
     participant = result.mappings().first()
-    
+
     if not participant:
         raise HTTPException(
-            status_code=403, 
+            status_code=403,
             detail="You are not a participant in this challenge"
         )
-    
+
     daily_target = participant['selected_daily_target'] or 5000
-    
-    # ========== CALCULATE VALID DATE RANGE ==========
     challenge_start = challenge['start_date']
     challenge_end = challenge['end_date']
-    
-    actual_start = max(start_date, challenge_start)
-    actual_end = min(end_date, challenge_end)
-    
-    valid_days_count = (actual_end - actual_start).days + 1 if actual_end >= actual_start else 0
-    # ================================================
-    
-    # Get steps for the requested week
+
+    # Get steps for the full challenge period
     steps_query = text("""
         SELECT day, steps as total_steps
         FROM daily_steps
         WHERE user_id = :user_id
-        AND day >= :start_date
-        AND day <= :end_date
+        AND day >= :challenge_start
+        AND day <= :challenge_end
         ORDER BY day
     """)
-    
+
     result = await db.execute(
         steps_query,
         {
             "user_id": current_user.id,
-            "start_date": actual_start,
-            "end_date": actual_end
+            "challenge_start": challenge_start,
+            "challenge_end": challenge_end,
         }
     )
     steps_data = result.mappings().all()
 
-    # Get total steps for the entire challenge period
-    total_steps_query = text("""
-        SELECT SUM(steps) as total_steps
-        FROM daily_steps
-        WHERE user_id = :user_id
-        AND day >= :challenge_start
-        AND day <= :challenge_end
-    """)
-    total_steps_result = await db.execute(
-        total_steps_query,
-        {
-            "user_id": current_user.id,
-            "challenge_start": challenge_start,
-            "challenge_end": challenge_end
-        }
-    )
-    total_challenge_steps = total_steps_result.scalar() or 0
-    
-    # Build 7-day array (Mon-Sun)
+    # Build daily array for entire challenge period
     days_array = []
-    week_total = 0
-    current_day = start_date
-    
-    while current_day <= end_date:
-        is_valid_day = (challenge_start <= current_day <= challenge_end)
-        
-        if is_valid_day:
-            day_data = next((d for d in steps_data if d['day'] == current_day), None)
-            steps = day_data['total_steps'] if day_data else 0
-            week_total += steps
-            
-            days_array.append({
-                "day": str(current_day),
-                "total_steps": steps,
-                "goal_met": steps >= daily_target,
-                "is_challenge_day": True
-            })
-        else:
-            days_array.append({
-                "day": str(current_day),
-                "total_steps": 0,
-                "goal_met": False,
-                "is_challenge_day": False
-            })
-        
+    total_steps = 0
+    days_goal_met = 0
+    current_day = challenge_start
+
+    while current_day <= challenge_end:
+        day_data = next((d for d in steps_data if d['day'] == current_day), None)
+        steps = day_data['total_steps'] if day_data else 0
+        goal_met = steps >= daily_target
+        total_steps += steps
+        if goal_met:
+            days_goal_met += 1
+
+        days_array.append({
+            "day": str(current_day),
+            "total_steps": steps,
+            "goal_met": goal_met,
+        })
         current_day += timedelta(days=1)
-    
-    # ========== JUST READ STREAK FROM DATABASE (Don't recalculate) ==========
+
+    # Streak (read from DB — never recalculate here)
     streak = {
         "current_streak": participant['challenge_current_streak'],
         "longest_streak": participant['challenge_longest_streak'],
-        "last_activity_date": str(participant['last_activity_date']) if participant['last_activity_date'] else None
+        "last_activity_date": str(participant['last_activity_date']) if participant['last_activity_date'] else None,
     }
-    # ========================================================================
-    
-    # Calculate total target for full challenge
-    total_challenge_days = (challenge_end - challenge_start).days + 1 if challenge_end >= challenge_start else 0
+
+    total_challenge_days = (challenge_end - challenge_start).days + 1
     total_challenge_target = daily_target * total_challenge_days
 
     return {
         "challenge_id": str(challenge['id']),
         "challenge_title": challenge['title'],
-        "challenge_start": str(challenge['start_date']),
-        "challenge_end": str(challenge['end_date']),
+        "challenge_start": str(challenge_start),
+        "challenge_end": str(challenge_end),
         "challenge_status": challenge['status'],
-        "week_start": str(start_date),
-        "week_end": str(end_date),
-        "valid_days_in_week": valid_days_count,
         "goal_daily_target": daily_target,
-        "goal_period_target": daily_target * valid_days_count,
+        "total_challenge_days": total_challenge_days,
         "total_challenge_target": total_challenge_target,
-            "total_challenge_steps": total_challenge_steps,
-        "week_total_steps": week_total,
+        "total_steps": total_steps,
+        "days_goal_met": days_goal_met,
         "days": days_array,
-        "streak": streak
+        "streak": streak,
     }
     
 @router.get("/{challenge_id}/leaderboard")

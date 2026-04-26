@@ -3,15 +3,16 @@ from typing import Optional
 from datetime import date, timedelta
 
 from fastapi import APIRouter, Depends, HTTPException, Query
-from sqlalchemy import select
+from sqlalchemy import select, func
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.db.deps import get_db
 from app.auth.deps import get_current_user
-from app.models import Habit, HabitChallenge, HabitCommitment, ChallengeStatus, User
+from app.models import Habit, HabitChallenge, HabitCommitment, UserHabit, ChallengeStatus, User
 from app.schemas.habits import (
     HabitOut, ChallengeCreate, ChallengeOut, LogCreate, LogOut, LogWithStreakOut,
     TodayOut, StreakOut, ChallengeHistoryOut, LeaderboardOut,
+    CustomHabitCreate, CustomHabitOut, AnyHabitOut,
 )
 from app.services import habits_service as svc
 
@@ -172,15 +173,129 @@ async def _out(challenge: HabitChallenge, db: AsyncSession) -> dict:
     from sqlalchemy.orm import selectinload
     result = await db.execute(
         select(HabitChallenge)
-        .options(selectinload(HabitChallenge.commitments).selectinload(HabitCommitment.habit))
+        .options(
+            selectinload(HabitChallenge.commitments).selectinload(HabitCommitment.habit),
+            selectinload(HabitChallenge.commitments).selectinload(HabitCommitment.user_habit),
+        )
         .where(HabitChallenge.id == challenge.id)
     )
     c = result.scalar_one()
+    habits = []
+    for cm in sorted(c.commitments, key=lambda x: x.sort_order):
+        if cm.user_habit:
+            habits.append(AnyHabitOut(
+                commitment_id=cm.id,
+                is_custom=True,
+                user_habit_id=cm.user_habit_id,
+                name=cm.user_habit.name,
+                emoji=cm.user_habit.emoji,
+            ))
+        else:
+            h = cm.habit
+            habits.append(AnyHabitOut(
+                commitment_id=cm.id,
+                is_custom=False,
+                habit_id=cm.habit_id,
+                name=h.label,
+                slug=h.slug,
+                description=h.description,
+                why=h.why,
+                impact=h.impact,
+                category=str(h.category.value) if hasattr(h.category, "value") else str(h.category),
+                tier=str(h.tier.value) if hasattr(h.tier, "value") else str(h.tier),
+                has_counter=h.has_counter,
+                unit=h.unit,
+                target=h.target,
+            ))
     return {
         "id": c.id,
         "pack_id": c.pack_id,
         "status": c.status,
         "started_at": c.started_at,
         "ends_at": c.ends_at,
-        "habits": [cm.habit for cm in sorted(c.commitments, key=lambda x: x.sort_order)],
+        "habits": habits,
     }
+
+
+# ── Custom habits ─────────────────────────────────────────────────────────────
+
+@habits_router.get("/custom", response_model=list[CustomHabitOut])
+async def list_custom_habits(
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """List all custom habits created by the current user."""
+    result = await db.execute(
+        select(UserHabit)
+        .where(UserHabit.user_id == str(current_user.id))
+        .order_by(UserHabit.created_at)
+    )
+    return result.scalars().all()
+
+
+@habits_router.post("/custom", response_model=CustomHabitOut, status_code=201)
+async def create_custom_habit(
+    body: CustomHabitCreate,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """
+    Create a new custom habit.
+    Name must be unique per user (case-sensitive).
+    """
+    name = body.name.strip()
+    if not name:
+        raise HTTPException(400, "Habit name cannot be empty")
+    if len(name) > 100:
+        raise HTTPException(400, "Habit name must be 100 characters or fewer")
+
+    existing = (await db.execute(
+        select(UserHabit).where(
+            UserHabit.user_id == str(current_user.id),
+            func.lower(UserHabit.name) == name.lower(),
+        )
+    )).scalar_one_or_none()
+    if existing:
+        raise HTTPException(409, "You already have a custom habit with this name")
+
+    uh = UserHabit(user_id=str(current_user.id), name=name, emoji=body.emoji)
+    db.add(uh)
+    await db.commit()
+    await db.refresh(uh)
+    return uh
+
+
+@habits_router.delete("/custom/{habit_id}", status_code=204)
+async def delete_custom_habit(
+    habit_id: int,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """
+    Delete a custom habit.
+    Blocked if the habit is part of the user's active challenge.
+    """
+    uh = (await db.execute(
+        select(UserHabit).where(
+            UserHabit.id == habit_id,
+            UserHabit.user_id == str(current_user.id),
+        )
+    )).scalar_one_or_none()
+    if not uh:
+        raise HTTPException(404, "Custom habit not found")
+
+    # Block deletion if used in an active challenge
+    in_use = (await db.execute(
+        select(func.count())
+        .select_from(HabitCommitment)
+        .join(HabitChallenge, HabitChallenge.id == HabitCommitment.challenge_id)
+        .where(
+            HabitCommitment.user_habit_id == habit_id,
+            HabitChallenge.status == ChallengeStatus.active,
+        )
+    )).scalar()
+    if in_use:
+        raise HTTPException(409, "Cannot delete a habit that is part of your active challenge")
+
+    await db.delete(uh)
+    await db.commit()

@@ -2,7 +2,7 @@
 from datetime import date, datetime
 from typing import Optional
 
-from pydantic import BaseModel, field_validator
+from pydantic import BaseModel, model_validator
 
 
 class HabitOut(BaseModel):
@@ -18,27 +18,62 @@ class HabitOut(BaseModel):
     unit: Optional[str] = None
     target: Optional[int] = None
     model_config = {"from_attributes": True}
- 
- 
+
+
+class CustomHabitCreate(BaseModel):
+    name: str
+    emoji: Optional[str] = None
+
+
+class CustomHabitOut(BaseModel):
+    id: int
+    name: str
+    emoji: Optional[str] = None
+    created_at: datetime
+    model_config = {"from_attributes": True}
+
+
+class AnyHabitOut(BaseModel):
+    """Unified habit view inside a challenge — works for both built-in and custom."""
+    commitment_id: int
+    is_custom: bool
+    name: str                        # label for built-in, name for custom
+    emoji: Optional[str] = None      # custom habits only
+    # built-in only
+    habit_id: Optional[int] = None
+    slug: Optional[str] = None
+    description: Optional[str] = None
+    why: Optional[str] = None
+    impact: Optional[str] = None
+    category: Optional[str] = None
+    tier: Optional[str] = None
+    has_counter: bool = False
+    unit: Optional[str] = None
+    target: Optional[int] = None
+    # custom only
+    user_habit_id: Optional[int] = None
+
+
 class ChallengeCreate(BaseModel):
     pack_id: Optional[str] = None
-    habit_slugs: list[str]
- 
-    @field_validator("habit_slugs")
-    @classmethod
-    def validate_habits(cls, v):
-        if not 2 <= len(v) <= 6:
-            raise ValueError("Choose between 2 and 6 habits")
-        return v
- 
- 
+    habit_slugs: list[str] = []
+    custom_habit_ids: list[int] = []
+
+    @model_validator(mode="after")
+    def validate_total_habits(self):
+        total = len(self.habit_slugs) + len(self.custom_habit_ids)
+        if not 2 <= total <= 6:
+            raise ValueError("Choose between 2 and 6 habits total (built-in + custom)")
+        return self
+
+
 class ChallengeOut(BaseModel):
     id: int
     pack_id: Optional[str]
     status: str
     started_at: date
     ends_at: date
-    habits: list[HabitOut] = []
+    habits: list[AnyHabitOut] = []
     model_config = {"from_attributes": True}
  
  
@@ -81,7 +116,7 @@ class LogWithStreakOut(BaseModel):
  
 class HabitTodayOut(BaseModel):
     commitment_id: int
-    habit: HabitOut
+    habit: AnyHabitOut
     completed: bool
     value: Optional[int]
     log_id: Optional[int]
